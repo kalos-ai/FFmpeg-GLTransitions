@@ -27,7 +27,10 @@
 .\#*
 /.config
 /.version
+/libavcodec/libavcodec.a
 /ffmpeg
+/ffmpeg_g
+/ffprobe_g
 /ffplay
 /ffprobe
 /config.asm
