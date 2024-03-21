@@ -48,6 +48,7 @@ configure()(
         --samples="${samples}"                                          \
         --enable-gpl                                                    \
         --enable-memory-poisoning                                       \
+        --enable-avresample                                             \
         ${ignore_tests:+--ignore-tests="$ignore_tests"}                 \
         ${arch:+--arch=$arch}                                           \
         ${cpu:+--cpu="$cpu"}                                            \
@@ -75,19 +76,7 @@ compile()(
 fate()(
     test "$build_only" = "yes" && return
     cd ${build} || return
-    if [ -n "${fate_environments}" ]; then
-        ret=0
-        for e in ${fate_environments}; do
-            eval "curenv=\${${e}_env}"
-            echo Testing environment ${e}: ${curenv}
-            ${make} ${makeopts_fate-${makeopts}} -k ${fate_targets} FATE_SUFFIX=_${e} ${curenv}
-            cur_ret=$?
-            test $cur_ret != 0 && ret=$cur_ret
-        done
-        return $ret
-    else
-        ${make} ${makeopts_fate-${makeopts}} -k ${fate_targets}
-    fi
+    ${make} ${makeopts_fate-${makeopts}} -k fate
 )
 
 clean(){
@@ -115,7 +104,6 @@ cd ${workdir}       || die "cd ${workdir} failed"
 src=${workdir}/src
 : ${build:=${workdir}/build}
 : ${inst:=${workdir}/install}
-: ${fate_targets:=fate}
 
 test -d "$src" && update || checkout || die "Error fetching source"
 

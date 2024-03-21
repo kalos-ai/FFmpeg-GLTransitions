@@ -20,14 +20,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "libavutil/avassert.h"
 #include "libavutil/pixdesc.h"
 
 #include "dxva2_internal.h"
 #include "av1dec.h"
-#include "hwaccel_internal.h"
 
 #define MAX_TILES 256
 
@@ -56,11 +53,10 @@ static int get_bit_depth_from_seq(const AV1RawSequenceHeader *seq)
         return 8;
 }
 
-int ff_dxva2_av1_fill_picture_parameters(const AVCodecContext *avctx, AVDXVAContext *ctx,
+static int fill_picture_parameters(const AVCodecContext *avctx, AVDXVAContext *ctx, const AV1DecContext *h,
                                     DXVA_PicParams_AV1 *pp)
 {
     int i,j, uses_lr;
-    const AV1DecContext *h = avctx->priv_data;
     const AV1RawSequenceHeader *seq = h->raw_seq;
     const AV1RawFrameHeader *frame_header = h->raw_frame_header;
     const AV1RawFilmGrainParams *film_grain = &h->cur_frame.film_grain;
@@ -76,7 +72,8 @@ int ff_dxva2_av1_fill_picture_parameters(const AVCodecContext *avctx, AVDXVACont
     pp->max_width  = seq->max_frame_width_minus_1 + 1;
     pp->max_height = seq->max_frame_height_minus_1 + 1;
 
-    pp->superres_denom      = frame_header->use_superres ? frame_header->coded_denom + AV1_SUPERRES_DENOM_MIN : AV1_SUPERRES_NUM;
+    pp->CurrPicTextureIndex = ff_dxva2_get_surface_index(avctx, ctx, h->cur_frame.tf.f);
+    pp->superres_denom      = frame_header->use_superres ? frame_header->coded_denom : AV1_SUPERRES_NUM;
     pp->bitdepth            = get_bit_depth_from_seq(seq);
     pp->seq_profile         = seq->seq_profile;
 
@@ -135,26 +132,24 @@ int ff_dxva2_av1_fill_picture_parameters(const AVCodecContext *avctx, AVDXVACont
     memset(pp->RefFrameMapTextureIndex, 0xFF, sizeof(pp->RefFrameMapTextureIndex));
     for (i = 0; i < AV1_REFS_PER_FRAME; i++) {
         int8_t ref_idx = frame_header->ref_frame_idx[i];
-        AVFrame *ref_frame = h->ref[ref_idx].f;
+        AVFrame *ref_frame = h->ref[ref_idx].tf.f;
 
         pp->frame_refs[i].width  = ref_frame->width;
         pp->frame_refs[i].height = ref_frame->height;
         pp->frame_refs[i].Index  = ref_frame->buf[0] ? ref_idx : 0xFF;
 
         /* Global Motion */
-        pp->frame_refs[i].wminvalid = h->cur_frame.gm_invalid[AV1_REF_FRAME_LAST + i];
+        pp->frame_refs[i].wminvalid = (h->cur_frame.gm_type[AV1_REF_FRAME_LAST + i] == AV1_WARP_MODEL_IDENTITY);
         pp->frame_refs[i].wmtype    = h->cur_frame.gm_type[AV1_REF_FRAME_LAST + i];
         for (j = 0; j < 6; ++j) {
              pp->frame_refs[i].wmmat[j] = h->cur_frame.gm_params[AV1_REF_FRAME_LAST + i][j];
         }
     }
     for (i = 0; i < AV1_NUM_REF_FRAMES; i++) {
-        AVFrame *ref_frame = h->ref[i].f;
+        AVFrame *ref_frame = h->ref[i].tf.f;
         if (ref_frame->buf[0])
-            pp->RefFrameMapTextureIndex[i] = ff_dxva2_get_surface_index(avctx, ctx, ref_frame, 0);
+            pp->RefFrameMapTextureIndex[i] = ff_dxva2_get_surface_index(avctx, ctx, ref_frame);
     }
-
-    pp->CurrPicTextureIndex = ff_dxva2_get_surface_index(avctx, ctx, h->cur_frame.f, 1);
 
     /* Loop filter parameters */
     pp->loop_filter.filter_level[0]        = frame_header->loop_filter_level[0];
@@ -283,7 +278,7 @@ static int dxva2_av1_start_frame(AVCodecContext *avctx,
     av_assert0(ctx_pic);
 
     /* Fill up DXVA_PicParams_AV1 */
-    if (ff_dxva2_av1_fill_picture_parameters(avctx, ctx, &ctx_pic->pp) < 0)
+    if (fill_picture_parameters(avctx, ctx, h, &ctx_pic->pp) < 0)
         return -1;
 
     ctx_pic->bitstream_size = 0;
@@ -441,7 +436,7 @@ static int dxva2_av1_end_frame(AVCodecContext *avctx)
     if (ctx_pic->bitstream_size <= 0)
         return -1;
 
-    ret = ff_dxva2_common_end_frame(avctx, h->cur_frame.f,
+    ret = ff_dxva2_common_end_frame(avctx, h->cur_frame.tf.f,
                                     &ctx_pic->pp, sizeof(ctx_pic->pp),
                                     NULL, 0,
                                     commit_bitstream_and_slice_buffer);
@@ -460,11 +455,11 @@ static int dxva2_av1_uninit(AVCodecContext *avctx)
 }
 
 #if CONFIG_AV1_DXVA2_HWACCEL
-const FFHWAccel ff_av1_dxva2_hwaccel = {
-    .p.name         = "av1_dxva2",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AV1,
-    .p.pix_fmt      = AV_PIX_FMT_DXVA2_VLD,
+const AVHWAccel ff_av1_dxva2_hwaccel = {
+    .name           = "av1_dxva2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AV1,
+    .pix_fmt        = AV_PIX_FMT_DXVA2_VLD,
     .init           = ff_dxva2_decode_init,
     .uninit         = dxva2_av1_uninit,
     .start_frame    = dxva2_av1_start_frame,
@@ -477,11 +472,11 @@ const FFHWAccel ff_av1_dxva2_hwaccel = {
 #endif
 
 #if CONFIG_AV1_D3D11VA_HWACCEL
-const FFHWAccel ff_av1_d3d11va_hwaccel = {
-    .p.name         = "av1_d3d11va",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AV1,
-    .p.pix_fmt      = AV_PIX_FMT_D3D11VA_VLD,
+const AVHWAccel ff_av1_d3d11va_hwaccel = {
+    .name           = "av1_d3d11va",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AV1,
+    .pix_fmt        = AV_PIX_FMT_D3D11VA_VLD,
     .init           = ff_dxva2_decode_init,
     .uninit         = dxva2_av1_uninit,
     .start_frame    = dxva2_av1_start_frame,
@@ -494,11 +489,11 @@ const FFHWAccel ff_av1_d3d11va_hwaccel = {
 #endif
 
 #if CONFIG_AV1_D3D11VA2_HWACCEL
-const FFHWAccel ff_av1_d3d11va2_hwaccel = {
-    .p.name         = "av1_d3d11va2",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AV1,
-    .p.pix_fmt      = AV_PIX_FMT_D3D11,
+const AVHWAccel ff_av1_d3d11va2_hwaccel = {
+    .name           = "av1_d3d11va2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AV1,
+    .pix_fmt        = AV_PIX_FMT_D3D11,
     .init           = ff_dxva2_decode_init,
     .uninit         = dxva2_av1_uninit,
     .start_frame    = dxva2_av1_start_frame,

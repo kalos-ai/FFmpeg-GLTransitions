@@ -32,10 +32,8 @@
 #include "avcodec.h"
 #include "blockdsp.h"
 #include "bswapdsp.h"
-#include "codec_internal.h"
 #include "idctdsp.h"
-#include "mpeg12data.h"
-#include "mpeg12dec.h"
+#include "mpeg12.h"
 #include "thread.h"
 
 typedef struct MDECContext {
@@ -43,8 +41,9 @@ typedef struct MDECContext {
     BlockDSPContext bdsp;
     BswapDSPContext bbdsp;
     IDCTDSPContext idsp;
+    ThreadFrame frame;
     GetBitContext gb;
-    uint8_t permutated_scantable[64];
+    ScanTable scantable;
     int version;
     int qscale;
     int last_dc[3];
@@ -63,12 +62,13 @@ static inline int mdec_decode_block_intra(MDECContext *a, int16_t *block, int n)
 {
     int level, diff, i, j, run;
     int component;
-    const uint8_t *const scantable = a->permutated_scantable;
+    RLTable *rl = &ff_rl_mpeg1;
+    uint8_t * const scantable = a->scantable.permutated;
     const uint16_t *quant_matrix = a->quant_matrix;
     const int qscale = a->qscale;
 
     /* DC coefficient */
-    if (a->version <= 2) {
+    if (a->version == 2) {
         block[0] = 2 * get_sbits(&a->gb, 10) + 1024;
     } else {
         component = (n <= 3 ? 0 : n - 4 + 1);
@@ -83,7 +83,7 @@ static inline int mdec_decode_block_intra(MDECContext *a, int16_t *block, int n)
         /* now quantify & encode AC coefficients */
         for (;;) {
             UPDATE_CACHE(re, &a->gb);
-            GET_RL_VLC(level, run, re, &a->gb, ff_mpeg1_rl_vlc, TEX_VLC_BITS, 2, 0);
+            GET_RL_VLC(level, run, re, &a->gb, rl->rl_vlc[0], TEX_VLC_BITS, 2, 0);
 
             if (level == 127) {
                 break;
@@ -166,18 +166,20 @@ static inline void idct_put(MDECContext *a, AVFrame *frame, int mb_x, int mb_y)
     }
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
-                        int *got_frame, AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx,
+                        void *data, int *got_frame,
+                        AVPacket *avpkt)
 {
     MDECContext * const a = avctx->priv_data;
     const uint8_t *buf    = avpkt->data;
     int buf_size          = avpkt->size;
+    ThreadFrame frame     = { .f = data };
     int ret;
 
-    if ((ret = ff_thread_get_buffer(avctx, frame, 0)) < 0)
+    if ((ret = ff_thread_get_buffer(avctx, &frame, 0)) < 0)
         return ret;
-    frame->pict_type = AV_PICTURE_TYPE_I;
-    frame->flags |= AV_FRAME_FLAG_KEY;
+    frame.f->pict_type = AV_PICTURE_TYPE_I;
+    frame.f->key_frame = 1;
 
     av_fast_padded_malloc(&a->bitstream_buffer, &a->bitstream_buffer_size, buf_size);
     if (!a->bitstream_buffer)
@@ -199,7 +201,7 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
             if ((ret = decode_mb(a, a->block)) < 0)
                 return ret;
 
-            idct_put(a, frame, a->mb_x, a->mb_y);
+            idct_put(a, frame.f, a->mb_x, a->mb_y);
         }
     }
 
@@ -218,12 +220,12 @@ static av_cold int decode_init(AVCodecContext *avctx)
 
     a->avctx           = avctx;
 
-    ff_blockdsp_init(&a->bdsp);
+    ff_blockdsp_init(&a->bdsp, avctx);
     ff_bswapdsp_init(&a->bbdsp);
     ff_idctdsp_init(&a->idsp, avctx);
     ff_mpeg12_init_vlcs();
-    ff_permute_scantable(a->permutated_scantable, ff_zigzag_direct,
-                         a->idsp.idct_permutation);
+    ff_init_scantable(a->idsp.idct_permutation, &a->scantable,
+                      ff_zigzag_direct);
 
     avctx->pix_fmt  = AV_PIX_FMT_YUVJ420P;
     avctx->color_range = AVCOL_RANGE_JPEG;
@@ -248,14 +250,15 @@ static av_cold int decode_end(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_mdec_decoder = {
-    .p.name           = "mdec",
-    CODEC_LONG_NAME("Sony PlayStation MDEC (Motion DECoder)"),
-    .p.type           = AVMEDIA_TYPE_VIDEO,
-    .p.id             = AV_CODEC_ID_MDEC,
+AVCodec ff_mdec_decoder = {
+    .name             = "mdec",
+    .long_name        = NULL_IF_CONFIG_SMALL("Sony PlayStation MDEC (Motion DECoder)"),
+    .type             = AVMEDIA_TYPE_VIDEO,
+    .id               = AV_CODEC_ID_MDEC,
     .priv_data_size   = sizeof(MDECContext),
     .init             = decode_init,
     .close            = decode_end,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
+    .decode           = decode_frame,
+    .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
+    .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE,
 };

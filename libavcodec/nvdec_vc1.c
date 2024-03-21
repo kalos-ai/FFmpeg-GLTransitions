@@ -20,11 +20,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "avcodec.h"
-#include "hwaccel_internal.h"
-#include "internal.h"
 #include "nvdec.h"
 #include "decode.h"
 #include "vc1.h"
@@ -114,11 +110,11 @@ static int nvdec_vc1_frame_params(AVCodecContext *avctx,
     return ff_nvdec_frame_params(avctx, hw_frames_ctx, 2, 0);
 }
 
-const FFHWAccel ff_vc1_nvdec_hwaccel = {
-    .p.name               = "vc1_nvdec",
-    .p.type               = AVMEDIA_TYPE_VIDEO,
-    .p.id                 = AV_CODEC_ID_VC1,
-    .p.pix_fmt            = AV_PIX_FMT_CUDA,
+const AVHWAccel ff_vc1_nvdec_hwaccel = {
+    .name                 = "vc1_nvdec",
+    .type                 = AVMEDIA_TYPE_VIDEO,
+    .id                   = AV_CODEC_ID_VC1,
+    .pix_fmt              = AV_PIX_FMT_CUDA,
     .start_frame          = nvdec_vc1_start_frame,
     .end_frame            = ff_nvdec_simple_end_frame,
     .decode_slice         = ff_nvdec_simple_decode_slice,
@@ -129,11 +125,11 @@ const FFHWAccel ff_vc1_nvdec_hwaccel = {
 };
 
 #if CONFIG_WMV3_NVDEC_HWACCEL
-const FFHWAccel ff_wmv3_nvdec_hwaccel = {
-    .p.name               = "wmv3_nvdec",
-    .p.type               = AVMEDIA_TYPE_VIDEO,
-    .p.id                 = AV_CODEC_ID_WMV3,
-    .p.pix_fmt            = AV_PIX_FMT_CUDA,
+const AVHWAccel ff_wmv3_nvdec_hwaccel = {
+    .name                 = "wmv3_nvdec",
+    .type                 = AVMEDIA_TYPE_VIDEO,
+    .id                   = AV_CODEC_ID_WMV3,
+    .pix_fmt              = AV_PIX_FMT_CUDA,
     .start_frame          = nvdec_vc1_start_frame,
     .end_frame            = ff_nvdec_simple_end_frame,
     .decode_slice         = ff_nvdec_simple_decode_slice,

@@ -19,19 +19,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include "config.h"
-#include "libavutil/attributes.h"
-#include "libavutil/common.h"
-#include "libavutil/intmath.h"
 #include "libavutil/mem_internal.h"
 
-#include "ac3defs.h"
+#include "avcodec.h"
+#include "ac3.h"
 #include "ac3dsp.h"
-#include "ac3tab.h"
 #include "mathops.h"
 
 static void ac3_exponent_min_c(uint8_t *exp, int num_reuse_blocks, int nb_coefs)
@@ -54,7 +46,7 @@ static void ac3_exponent_min_c(uint8_t *exp, int num_reuse_blocks, int nb_coefs)
     }
 }
 
-static void float_to_fixed24_c(int32_t *dst, const float *src, size_t len)
+static void float_to_fixed24_c(int32_t *dst, const float *src, unsigned int len)
 {
     const float scale = 1 << 24;
     do {
@@ -363,9 +355,8 @@ void ff_ac3dsp_downmix(AC3DSPContext *c, float **samples, float **matrix,
             c->downmix = ac3_downmix_5_to_1_symmetric_c;
         }
 
-#if ARCH_X86
-        ff_ac3dsp_set_downmix_x86(c);
-#endif
+        if (ARCH_X86)
+            ff_ac3dsp_set_downmix_x86(c);
     }
 
     if (c->downmix)
@@ -374,7 +365,7 @@ void ff_ac3dsp_downmix(AC3DSPContext *c, float **samples, float **matrix,
         ac3_downmix_c(samples, matrix, out_ch, in_ch, len);
 }
 
-av_cold void ff_ac3dsp_init(AC3DSPContext *c)
+av_cold void ff_ac3dsp_init(AC3DSPContext *c, int bit_exact)
 {
     c->ac3_exponent_min = ac3_exponent_min_c;
     c->float_to_fixed24 = float_to_fixed24_c;
@@ -389,13 +380,10 @@ av_cold void ff_ac3dsp_init(AC3DSPContext *c)
     c->downmix               = NULL;
     c->downmix_fixed         = NULL;
 
-#if ARCH_ARM
-    ff_ac3dsp_init_arm(c);
-#elif ARCH_X86
-    ff_ac3dsp_init_x86(c);
-#elif ARCH_MIPS
-    ff_ac3dsp_init_mips(c);
-#elif ARCH_RISCV
-    ff_ac3dsp_init_riscv(c);
-#endif
+    if (ARCH_ARM)
+        ff_ac3dsp_init_arm(c, bit_exact);
+    if (ARCH_X86)
+        ff_ac3dsp_init_x86(c, bit_exact);
+    if (ARCH_MIPS)
+        ff_ac3dsp_init_mips(c, bit_exact);
 }

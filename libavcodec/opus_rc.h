@@ -25,7 +25,8 @@
 
 #include <stdint.h>
 #include "get_bits.h"
-#include "opus.h"
+
+#define OPUS_MAX_PACKET_SIZE 1275
 
 #define opus_ilog(i) (av_log2(i) + !!(i))
 
@@ -44,7 +45,7 @@ typedef struct OpusRangeCoder {
     uint32_t total_bits;
 
     /* Encoder */
-    uint8_t buf[OPUS_MAX_FRAME_SIZE + 12]; /* memcpy vs (memmove + overreading) */
+    uint8_t buf[OPUS_MAX_PACKET_SIZE + 12]; /* memcpy vs (memmove + overreading) */
     uint8_t *rng_cur;                      /* Current range coded byte */
     int ext;                               /* Awaiting propagation */
     int rem;                               /* Carryout flag */

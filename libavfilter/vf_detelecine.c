@@ -58,11 +58,11 @@ typedef struct DetelecineContext {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 
 static const AVOption detelecine_options[] = {
-    {"first_field", "select first field", OFFSET(first_field), AV_OPT_TYPE_INT,   {.i64=0}, 0, 1, FLAGS, .unit = "field"},
-        {"top",    "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "field"},
-        {"t",      "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "field"},
-        {"bottom", "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "field"},
-        {"b",      "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "field"},
+    {"first_field", "select first field", OFFSET(first_field), AV_OPT_TYPE_INT,   {.i64=0}, 0, 1, FLAGS, "field"},
+        {"top",    "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "field"},
+        {"t",      "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "field"},
+        {"bottom", "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "field"},
+        {"b",      "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "field"},
     {"pattern", "pattern that describe for how many fields a frame is to be displayed", OFFSET(pattern), AV_OPT_TYPE_STRING, {.str="23"}, 0, 0, FLAGS},
     {"start_frame", "position of first frame with respect to the pattern if stream is cut", OFFSET(start_frame), AV_OPT_TYPE_INT, {.i64=0}, 0, 13, FLAGS},
     {NULL}
@@ -124,11 +124,16 @@ static av_cold int init(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    int reject_flags = AV_PIX_FMT_FLAG_BITSTREAM |
-                       AV_PIX_FMT_FLAG_PAL       |
-                       AV_PIX_FMT_FLAG_HWACCEL;
+    AVFilterFormats *formats = NULL;
+    int ret;
 
-    return ff_set_common_formats(ctx, ff_formats_pixdesc_filter(0, reject_flags));
+    ret = ff_formats_pixdesc_filter(&formats, 0,
+                                    AV_PIX_FMT_FLAG_BITSTREAM |
+                                    AV_PIX_FMT_FLAG_PAL |
+                                    AV_PIX_FMT_FLAG_HWACCEL);
+    if (ret < 0)
+        return ret;
+    return ff_set_common_formats(ctx, formats);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -355,6 +360,7 @@ static const AVFilterPad detelecine_inputs[] = {
         .filter_frame  = filter_frame,
         .config_props  = config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad detelecine_outputs[] = {
@@ -363,16 +369,17 @@ static const AVFilterPad detelecine_outputs[] = {
         .type          = AVMEDIA_TYPE_VIDEO,
         .config_props  = config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_detelecine = {
+AVFilter ff_vf_detelecine = {
     .name          = "detelecine",
     .description   = NULL_IF_CONFIG_SMALL("Apply an inverse telecine pattern."),
     .priv_size     = sizeof(DetelecineContext),
     .priv_class    = &detelecine_class,
     .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(detelecine_inputs),
-    FILTER_OUTPUTS(detelecine_outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    .query_formats = query_formats,
+    .inputs        = detelecine_inputs,
+    .outputs       = detelecine_outputs,
 };

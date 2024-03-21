@@ -22,9 +22,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
-#include "formats.h"
 #include "internal.h"
-#include "video.h"
 
 typedef struct WeaveContext {
     const AVClass *class;
@@ -32,7 +30,6 @@ typedef struct WeaveContext {
     int double_weave;
     int nb_planes;
     int planeheight[4];
-    int outheight[4];
     int linesize[4];
 
     AVFrame *prev;
@@ -42,21 +39,27 @@ typedef struct WeaveContext {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 
 static const AVOption weave_options[] = {
-    { "first_field", "set first field", OFFSET(first_field), AV_OPT_TYPE_INT,   {.i64=0}, 0, 1, FLAGS, .unit = "field"},
-        { "top",     "set top field first",               0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "field"},
-        { "t",       "set top field first",               0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "field"},
-        { "bottom",  "set bottom field first",            0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "field"},
-        { "b",       "set bottom field first",            0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "field"},
+    { "first_field", "set first field", OFFSET(first_field), AV_OPT_TYPE_INT,   {.i64=0}, 0, 1, FLAGS, "field"},
+        { "top",     "set top field first",               0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "field"},
+        { "t",       "set top field first",               0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "field"},
+        { "bottom",  "set bottom field first",            0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "field"},
+        { "b",       "set bottom field first",            0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "field"},
     { NULL }
 };
 
-AVFILTER_DEFINE_CLASS_EXT(weave, "(double)weave", weave_options);
+AVFILTER_DEFINE_CLASS(weave);
 
 static int query_formats(AVFilterContext *ctx)
 {
-    int reject_flags = AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_HWACCEL;
+    AVFilterFormats *formats = NULL;
+    int ret;
 
-    return ff_set_common_formats(ctx, ff_formats_pixdesc_filter(0, reject_flags));
+    ret = ff_formats_pixdesc_filter(&formats, 0,
+                                    AV_PIX_FMT_FLAG_PAL |
+                                    AV_PIX_FMT_FLAG_HWACCEL);
+    if (ret < 0)
+        return ret;
+    return ff_set_common_formats(ctx, formats);
 }
 
 static int config_props_output(AVFilterLink *outlink)
@@ -81,9 +84,6 @@ static int config_props_output(AVFilterLink *outlink)
 
     s->planeheight[1] = s->planeheight[2] = AV_CEIL_RSHIFT(inlink->h, desc->log2_chroma_h);
     s->planeheight[0] = s->planeheight[3] = inlink->h;
-
-    s->outheight[1] = s->outheight[2] = AV_CEIL_RSHIFT(2*inlink->h, desc->log2_chroma_h);
-    s->outheight[0] = s->outheight[3] = 2*inlink->h;
 
     s->nb_planes = av_pix_fmt_count_planes(inlink->format);
 
@@ -110,20 +110,19 @@ static int weave_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
         const int height = s->planeheight[i];
         const int start = (height * jobnr) / nb_jobs;
         const int end = (height * (jobnr+1)) / nb_jobs;
-        const int compensation = 2*end > s->outheight[i];
 
         av_image_copy_plane(out->data[i] + out->linesize[i] * field1 +
                             out->linesize[i] * start * 2,
                             out->linesize[i] * 2,
                             in->data[i] + start * in->linesize[i],
                             in->linesize[i],
-                            s->linesize[i], end - start - compensation * field1);
+                            s->linesize[i], end - start);
         av_image_copy_plane(out->data[i] + out->linesize[i] * field2 +
                             out->linesize[i] * start * 2,
                             out->linesize[i] * 2,
                             s->prev->data[i] + start * s->prev->linesize[i],
                             s->prev->linesize[i],
-                            s->linesize[i], end - start - compensation * field2);
+                            s->linesize[i], end - start);
     }
 
     return 0;
@@ -151,21 +150,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     av_frame_copy_props(out, in);
 
     td.out = out, td.in = in;
-    ff_filter_execute(ctx, weave_slice, &td, NULL,
-                      FFMIN(s->planeheight[1], ff_filter_get_nb_threads(ctx)));
+    ctx->internal->execute(ctx, weave_slice, &td, NULL, FFMIN(s->planeheight[1],
+                                                              ff_filter_get_nb_threads(ctx)));
 
     out->pts = s->double_weave ? s->prev->pts : in->pts / 2;
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
     out->interlaced_frame = 1;
     out->top_field_first = !s->first_field;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-    out->flags |= AV_FRAME_FLAG_INTERLACED;
-    if (s->first_field)
-        out->flags &= ~AV_FRAME_FLAG_TOP_FIELD_FIRST;
-    else
-        out->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
 
     if (!s->double_weave)
         av_frame_free(&in);
@@ -188,6 +178,7 @@ static const AVFilterPad weave_inputs[] = {
         .type             = AVMEDIA_TYPE_VIDEO,
         .filter_frame     = filter_frame,
     },
+    { NULL }
 };
 
 static const AVFilterPad weave_outputs[] = {
@@ -196,17 +187,18 @@ static const AVFilterPad weave_outputs[] = {
         .type          = AVMEDIA_TYPE_VIDEO,
         .config_props  = config_props_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_weave = {
+AVFilter ff_vf_weave = {
     .name          = "weave",
     .description   = NULL_IF_CONFIG_SMALL("Weave input video fields into frames."),
     .priv_size     = sizeof(WeaveContext),
     .priv_class    = &weave_class,
+    .query_formats = query_formats,
     .uninit        = uninit,
-    FILTER_INPUTS(weave_inputs),
-    FILTER_OUTPUTS(weave_outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    .inputs        = weave_inputs,
+    .outputs       = weave_outputs,
     .flags         = AVFILTER_FLAG_SLICE_THREADS,
 };
 
@@ -220,15 +212,18 @@ static av_cold int init(AVFilterContext *ctx)
     return 0;
 }
 
-const AVFilter ff_vf_doubleweave = {
+#define doubleweave_options weave_options
+AVFILTER_DEFINE_CLASS(doubleweave);
+
+AVFilter ff_vf_doubleweave = {
     .name          = "doubleweave",
     .description   = NULL_IF_CONFIG_SMALL("Weave input video fields into double number of frames."),
-    .priv_class    = &weave_class,
     .priv_size     = sizeof(WeaveContext),
+    .priv_class    = &doubleweave_class,
+    .query_formats = query_formats,
     .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(weave_inputs),
-    FILTER_OUTPUTS(weave_outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    .inputs        = weave_inputs,
+    .outputs       = weave_outputs,
     .flags         = AVFILTER_FLAG_SLICE_THREADS,
 };

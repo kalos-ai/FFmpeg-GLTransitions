@@ -22,10 +22,7 @@
 #ifndef AVCODEC_WAVPACK_H
 #define AVCODEC_WAVPACK_H
 
-#include <limits.h>
-#include <stdint.h>
-#include "libavutil/attributes.h"
-#include "libavutil/intmath.h"
+#include "libavutil/common.h"
 
 #define MAX_TERMS      16
 #define MAX_TERM        8

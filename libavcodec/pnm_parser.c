@@ -65,8 +65,8 @@ retry:
         pnmctx.bytestream_end   = pc->buffer + pc->index;
     } else {
         pnmctx.bytestream_start =
-        pnmctx.bytestream       = buf + skip;
-        pnmctx.bytestream_end   = buf + buf_size - skip;
+        pnmctx.bytestream       = (uint8_t *) buf + skip; /* casts avoid warnings */
+        pnmctx.bytestream_end   = (uint8_t *) buf + buf_size - skip;
     }
     if (ff_pnm_decode_header(avctx, &pnmctx) < 0) {
         if (pnmctx.bytestream < pnmctx.bytestream_end) {
@@ -81,9 +81,9 @@ retry:
             goto retry;
         }
     } else if (pnmctx.type < 4) {
-        const uint8_t *bs   = pnmctx.bytestream;
+              uint8_t *bs  = pnmctx.bytestream;
         const uint8_t *end = pnmctx.bytestream_end;
-        const uint8_t *sync = bs;
+        uint8_t *sync      = bs;
 
         if (pc->index) {
             av_assert0(pnmpc->ascii_scan <= end - bs);
@@ -111,8 +111,6 @@ retry:
     } else {
         int ret = av_image_get_buffer_size(avctx->pix_fmt, avctx->width, avctx->height, 1);
         next = pnmctx.bytestream - pnmctx.bytestream_start + skip;
-        if (ret > 0 && pnmctx.half)
-            ret >>= 1;
         if (ret >= 0 && next + (uint64_t)ret <= INT_MAX)
             next += ret;
     }
@@ -133,10 +131,9 @@ end:
     return next;
 }
 
-const AVCodecParser ff_pnm_parser = {
+AVCodecParser ff_pnm_parser = {
     .codec_ids      = { AV_CODEC_ID_PGM, AV_CODEC_ID_PGMYUV, AV_CODEC_ID_PPM,
-                        AV_CODEC_ID_PBM, AV_CODEC_ID_PAM, AV_CODEC_ID_PFM,
-                        AV_CODEC_ID_PHM },
+                        AV_CODEC_ID_PBM, AV_CODEC_ID_PAM },
     .priv_data_size = sizeof(PNMParseContext),
     .parser_parse   = pnm_parse,
     .parser_close   = ff_parse_close,

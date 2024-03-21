@@ -18,9 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdio.h>
-#include "libavutil/csp.h"
-#include "libavutil/macros.h"
+#include "libavutil/color_utils.c"
 
 int main(int argc, char *argv[])
 {
@@ -32,7 +30,7 @@ int main(int argc, char *argv[])
   };
 
   for(i = 0; i < AVCOL_TRC_NB; i++) {
-      av_csp_trc_function func = av_csp_trc_func_from_id(i);
+      avpriv_trc_function func = avpriv_get_trc_function_from_trc(i);
       for(j = 0; j < FF_ARRAY_ELEMS(test_data); j++) {
           if(func != NULL) {
               double result = func(test_data[j]);

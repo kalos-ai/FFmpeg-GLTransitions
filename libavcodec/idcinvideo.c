@@ -44,12 +44,12 @@
  * decoding algorithm and it worked fine on much lower spec machines.
  */
 
-#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/internal.h"
 
 #define HUFFMAN_TABLE_SIZE 64 * 1024
@@ -207,12 +207,16 @@ static int idcin_decode_vlcs(IdcinContext *s, AVFrame *frame)
     return 0;
 }
 
-static int idcin_decode_frame(AVCodecContext *avctx, AVFrame *frame,
-                              int *got_frame, AVPacket *avpkt)
+static int idcin_decode_frame(AVCodecContext *avctx,
+                              void *data, int *got_frame,
+                              AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     IdcinContext *s = avctx->priv_data;
+    buffer_size_t pal_size;
+    const uint8_t *pal = av_packet_get_side_data(avpkt, AV_PKT_DATA_PALETTE, &pal_size);
+    AVFrame *frame = data;
     int ret;
 
     s->buf = buf;
@@ -224,14 +228,12 @@ static int idcin_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     if (idcin_decode_vlcs(s, frame))
         return AVERROR_INVALIDDATA;
 
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
-    frame->palette_has_changed =
-#endif
-    ff_copy_palette(s->pal, avpkt, avctx);
-#if FF_API_PALETTE_HAS_CHANGED
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
+    if (pal && pal_size == AVPALETTE_SIZE) {
+        frame->palette_has_changed = 1;
+        memcpy(s->pal, pal, AVPALETTE_SIZE);
+    } else if (pal) {
+        av_log(avctx, AV_LOG_ERROR, "Palette size %d is wrong\n", pal_size);
+    }
     /* make the palette available on the way out */
     memcpy(frame->data[1], s->pal, AVPALETTE_SIZE);
 
@@ -241,19 +243,20 @@ FF_ENABLE_DEPRECATION_WARNINGS
     return buf_size;
 }
 
-static const FFCodecDefault idcin_defaults[] = {
+static const AVCodecDefault idcin_defaults[] = {
     { "max_pixels", "320*240" },
     { NULL },
 };
 
-const FFCodec ff_idcin_decoder = {
-    .p.name         = "idcinvideo",
-    CODEC_LONG_NAME("id Quake II CIN video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_IDCIN,
+AVCodec ff_idcin_decoder = {
+    .name           = "idcinvideo",
+    .long_name      = NULL_IF_CONFIG_SMALL("id Quake II CIN video"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_IDCIN,
     .priv_data_size = sizeof(IdcinContext),
     .init           = idcin_decode_init,
-    FF_CODEC_DECODE_CB(idcin_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode         = idcin_decode_frame,
+    .capabilities   = AV_CODEC_CAP_DR1,
     .defaults       = idcin_defaults,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

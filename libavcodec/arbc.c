@@ -19,13 +19,18 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "libavutil/imgutils.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 typedef struct ARBCContext {
     GetByteContext gb;
@@ -111,10 +116,11 @@ static int fill_tileX(AVCodecContext *avctx, int tile_width, int tile_height,
     return pixels_overwritten;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int decode_frame(AVCodecContext *avctx, void *data,
                         int *got_frame, AVPacket *avpkt)
 {
     ARBCContext *s = avctx->priv_data;
+    AVFrame *frame = data;
     int ret, nb_segments;
     int prev_pixels = avctx->width * avctx->height;
 
@@ -166,14 +172,12 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
             prev_pixels -= fill_tile4(avctx, fill, frame);
     }
 
-    if ((ret = av_frame_replace(s->prev_frame, frame)) < 0)
+    av_frame_unref(s->prev_frame);
+    if ((ret = av_frame_ref(s->prev_frame, frame)) < 0)
         return ret;
 
     frame->pict_type = prev_pixels <= 0 ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_P;
-    if (prev_pixels <= 0)
-        frame->flags |= AV_FRAME_FLAG_KEY;
-    else
-        frame->flags &= ~AV_FRAME_FLAG_KEY;
+    frame->key_frame = prev_pixels <= 0;
     *got_frame = 1;
 
     return avpkt->size;
@@ -208,16 +212,16 @@ static av_cold int decode_close(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_arbc_decoder = {
-    .p.name         = "arbc",
-    CODEC_LONG_NAME("Gryphon's Anim Compressor"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_ARBC,
+AVCodec ff_arbc_decoder = {
+    .name           = "arbc",
+    .long_name      = NULL_IF_CONFIG_SMALL("Gryphon's Anim Compressor"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_ARBC,
     .priv_data_size = sizeof(ARBCContext),
     .init           = decode_init,
-    FF_CODEC_DECODE_CB(decode_frame),
+    .decode         = decode_frame,
     .flush          = decode_flush,
     .close          = decode_close,
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

@@ -22,7 +22,6 @@
  */
 
 #include "libavutil/avassert.h"
-#include "libavutil/avstring.h"
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/time.h"
@@ -34,11 +33,9 @@
 #include "url.h"
 
 #include <librist/librist.h>
-#include <librist/version.h>
 
 // RIST_MAX_PACKET_SIZE - 28 minimum protocol overhead
 #define MAX_PAYLOAD_SIZE (10000-28)
-#define FIFO_SIZE_DEFAULT 8192
 
 typedef struct RISTContext {
     const AVClass *class;
@@ -48,8 +45,6 @@ typedef struct RISTContext {
     int packet_size;
     int log_level;
     int encryption;
-    int fifo_size;
-    int overrun_nonfatal;
     char *secret;
 
     struct rist_logging_settings logging_settings;
@@ -63,13 +58,11 @@ typedef struct RISTContext {
 #define E AV_OPT_FLAG_ENCODING_PARAM
 #define OFFSET(x) offsetof(RISTContext, x)
 static const AVOption librist_options[] = {
-    { "rist_profile","set profile",     OFFSET(profile),     AV_OPT_TYPE_INT,   {.i64=RIST_PROFILE_MAIN},     0, 2, .flags = D|E, .unit = "profile" },
-    { "simple",      NULL,              0,                   AV_OPT_TYPE_CONST, {.i64=RIST_PROFILE_SIMPLE},   0, 0, .flags = D|E, .unit = "profile" },
-    { "main",        NULL,              0,                   AV_OPT_TYPE_CONST, {.i64=RIST_PROFILE_MAIN},     0, 0, .flags = D|E, .unit = "profile" },
-    { "advanced",    NULL,              0,                   AV_OPT_TYPE_CONST, {.i64=RIST_PROFILE_ADVANCED}, 0, 0, .flags = D|E, .unit = "profile" },
+    { "rist_profile","set profile",     OFFSET(profile),     AV_OPT_TYPE_INT,   {.i64=RIST_PROFILE_MAIN},     0, 2, .flags = D|E, "profile" },
+    { "simple",      NULL,              0,                   AV_OPT_TYPE_CONST, {.i64=RIST_PROFILE_SIMPLE},   0, 0, .flags = D|E, "profile" },
+    { "main",        NULL,              0,                   AV_OPT_TYPE_CONST, {.i64=RIST_PROFILE_MAIN},     0, 0, .flags = D|E, "profile" },
+    { "advanced",    NULL,              0,                   AV_OPT_TYPE_CONST, {.i64=RIST_PROFILE_ADVANCED}, 0, 0, .flags = D|E, "profile" },
     { "buffer_size", "set buffer_size in ms", OFFSET(buffer_size), AV_OPT_TYPE_INT, {.i64=0},                 0, 30000, .flags = D|E },
-    { "fifo_size",   "set fifo buffer size, must be a power of 2", OFFSET(fifo_size), AV_OPT_TYPE_INT, {.i64=FIFO_SIZE_DEFAULT}, 32, 262144, .flags = D|E },
-    { "overrun_nonfatal", "survive in case of receiving fifo buffer overrun", OFFSET(overrun_nonfatal), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,    D },
     { "pkt_size",    "set packet size", OFFSET(packet_size), AV_OPT_TYPE_INT,   {.i64=1316},                  1, MAX_PAYLOAD_SIZE,    .flags = D|E },
     { "log_level",   "set loglevel",    OFFSET(log_level),   AV_OPT_TYPE_INT,   {.i64=RIST_LOG_INFO},        -1, INT_MAX, .flags = D|E },
     { "secret", "set encryption secret",OFFSET(secret),      AV_OPT_TYPE_STRING,{.str=NULL},                  0, 0,       .flags = D|E },
@@ -130,7 +123,6 @@ static int librist_open(URLContext *h, const char *uri, int flags)
     if ((flags & AVIO_FLAG_READ_WRITE) == AVIO_FLAG_READ_WRITE)
         return AVERROR(EINVAL);
 
-    s->logging_settings = (struct rist_logging_settings)LOGGING_SETTINGS_INITIALIZER;
     ret = rist_logging_set(&logging_settings, s->log_level, log_cb, h, NULL, NULL);
     if (ret < 0)
         return risterr2ret(ret);
@@ -153,15 +145,9 @@ static int librist_open(URLContext *h, const char *uri, int flags)
     if (ret < 0)
         goto err;
 
-    ret = rist_parse_address2(uri, &peer_config);
+    ret = rist_parse_address(uri, (const struct rist_peer_config **)&peer_config);
     if (ret < 0)
         goto err;
-
-    if (flags & AVIO_FLAG_READ) {
-        ret = rist_receiver_set_output_fifo_size(s->ctx, s->fifo_size);
-        if (ret != 0)
-            goto err;
-    }
 
     if (((s->encryption == 128 || s->encryption == 256) && !s->secret) ||
         ((peer_config->key_size == 128 || peer_config->key_size == 256) && !peer_config->secret[0])) {
@@ -200,11 +186,10 @@ err:
 static int librist_read(URLContext *h, uint8_t *buf, int size)
 {
     RISTContext *s = h->priv_data;
+    const struct rist_data_block *data_block;
     int ret;
 
-    struct rist_data_block *data_block;
-    ret = rist_receiver_data_read2(s->ctx, &data_block, POLLING_TIME);
-
+    ret = rist_receiver_data_read(s->ctx, &data_block, POLLING_TIME);
     if (ret < 0)
         return risterr2ret(ret);
 
@@ -212,24 +197,14 @@ static int librist_read(URLContext *h, uint8_t *buf, int size)
         return AVERROR(EAGAIN);
 
     if (data_block->payload_len > MAX_PAYLOAD_SIZE) {
-        rist_receiver_data_block_free2(&data_block);
+        rist_receiver_data_block_free((struct rist_data_block**)&data_block);
         return AVERROR_EXTERNAL;
-    }
-
-    if (data_block->flags & RIST_DATA_FLAGS_OVERFLOW) {
-        if (!s->overrun_nonfatal) {
-            av_log(h, AV_LOG_ERROR, "Fifo buffer overrun. "
-                    "To avoid, increase fifo_size option. "
-                    "To survive in such case, use overrun_nonfatal option\n");
-            size = AVERROR(EIO);
-            goto out_free;
-        }
     }
 
     size = data_block->payload_len;
     memcpy(buf, data_block->payload, size);
-out_free:
-    rist_receiver_data_block_free2(&data_block);
+    rist_receiver_data_block_free((struct rist_data_block**)&data_block);
+
     return size;
 }
 

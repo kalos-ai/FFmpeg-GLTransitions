@@ -20,10 +20,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdint.h>
-#include <string.h>
+#include <inttypes.h>
 
-#include "config.h"
+#include "avcodec.h"
 #include "celp_filters.h"
 #include "libavutil/avassert.h"
 #include "libavutil/common.h"
@@ -215,7 +214,6 @@ void ff_celp_filter_init(CELPFContext *c)
     c->celp_lp_synthesis_filterf        = ff_celp_lp_synthesis_filterf;
     c->celp_lp_zero_synthesis_filterf   = ff_celp_lp_zero_synthesis_filterf;
 
-#if HAVE_MIPSFPU
-    ff_celp_filter_init_mips(c);
-#endif
+    if(HAVE_MIPSFPU)
+        ff_celp_filter_init_mips(c);
 }

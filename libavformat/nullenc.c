@@ -20,19 +20,17 @@
  */
 
 #include "avformat.h"
-#include "mux.h"
 
 static int null_write_packet(struct AVFormatContext *s, AVPacket *pkt)
 {
     return 0;
 }
 
-const FFOutputFormat ff_null_muxer = {
-    .p.name            = "null",
-    .p.long_name       = NULL_IF_CONFIG_SMALL("raw null video"),
-    .p.audio_codec     = AV_NE(AV_CODEC_ID_PCM_S16BE, AV_CODEC_ID_PCM_S16LE),
-    .p.video_codec     = AV_CODEC_ID_WRAPPED_AVFRAME,
+AVOutputFormat ff_null_muxer = {
+    .name              = "null",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw null video"),
+    .audio_codec       = AV_NE(AV_CODEC_ID_PCM_S16BE, AV_CODEC_ID_PCM_S16LE),
+    .video_codec       = AV_CODEC_ID_WRAPPED_AVFRAME,
     .write_packet      = null_write_packet,
-    .p.flags           = AVFMT_VARIABLE_FPS | AVFMT_NOFILE | AVFMT_NOTIMESTAMPS,
-    .interleave_packet = ff_interleave_packet_passthrough,
+    .flags             = AVFMT_VARIABLE_FPS | AVFMT_NOFILE | AVFMT_NOTIMESTAMPS,
 };

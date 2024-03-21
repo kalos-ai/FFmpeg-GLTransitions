@@ -23,6 +23,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
 #include "video.h"
 
@@ -34,9 +35,6 @@ typedef struct ESTDIFContext {
     int deint;            ///< which frames to deinterlace
     int rslope;           ///< best edge slope search radius
     int redge;            ///< best edge match search radius
-    int ecost;            ///< edge cost for edge matching
-    int mcost;            ///< middle cost for edge matching
-    int dcost;            ///< distance cost for edge matching
     int interp;           ///< type of interpolation
     int linesize[4];      ///< bytes of pixel data per line for each plane
     int planewidth[4];    ///< width of each plane
@@ -44,16 +42,17 @@ typedef struct ESTDIFContext {
     int field;            ///< which field are we on, 0 or 1
     int eof;
     int depth;
-    int max;
+    int half;
     int nb_planes;
     int nb_threads;
+    int64_t pts;
     AVFrame *prev;
 
     void (*interpolate)(struct ESTDIFContext *s, uint8_t *dst,
                         const uint8_t *prev_line,  const uint8_t *next_line,
                         const uint8_t *prev2_line, const uint8_t *next2_line,
                         const uint8_t *prev3_line, const uint8_t *next3_line,
-                        int x, int width, int rslope, int redge,
+                        int x, int width, int rslope, int redge, unsigned half,
                         int depth, int *K);
 
     unsigned (*mid_8[3])(const uint8_t *const prev,
@@ -78,25 +77,22 @@ typedef struct ESTDIFContext {
 
 #define OFFSET(x) offsetof(ESTDIFContext, x)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_RUNTIME_PARAM
-#define CONST(name, help, val, u) { name, help, 0, AV_OPT_TYPE_CONST, {.i64=val}, 0, 0, FLAGS, .unit = u }
+#define CONST(name, help, val, unit) { name, help, 0, AV_OPT_TYPE_CONST, {.i64=val}, 0, 0, FLAGS, unit }
 
 static const AVOption estdif_options[] = {
-    { "mode", "specify the mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=1}, 0, 1, FLAGS, .unit = "mode" },
+    { "mode", "specify the mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=1}, 0, 1, FLAGS, "mode" },
     CONST("frame", "send one frame for each frame", 0, "mode"),
     CONST("field", "send one frame for each field", 1, "mode"),
-    { "parity", "specify the assumed picture field parity", OFFSET(parity), AV_OPT_TYPE_INT, {.i64=-1}, -1, 1, FLAGS, .unit = "parity" },
+    { "parity", "specify the assumed picture field parity", OFFSET(parity), AV_OPT_TYPE_INT, {.i64=-1}, -1, 1, FLAGS, "parity" },
     CONST("tff",  "assume top field first",    0, "parity"),
     CONST("bff",  "assume bottom field first", 1, "parity"),
     CONST("auto", "auto detect parity",       -1, "parity"),
-    { "deint",  "specify which frames to deinterlace", OFFSET(deint), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, .unit = "deint" },
+    { "deint",  "specify which frames to deinterlace", OFFSET(deint), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, "deint" },
     CONST("all",        "deinterlace all frames",                       0, "deint"),
     CONST("interlaced", "only deinterlace frames marked as interlaced", 1, "deint"),
-    { "rslope", "specify the search radius for edge slope tracing", OFFSET(rslope), AV_OPT_TYPE_INT, {.i64=1}, 1, MAX_R, FLAGS },
-    { "redge",  "specify the search radius for best edge matching", OFFSET(redge),  AV_OPT_TYPE_INT, {.i64=2}, 0, MAX_R, FLAGS },
-    { "ecost",  "specify the edge cost for edge matching",          OFFSET(ecost),  AV_OPT_TYPE_INT, {.i64=2}, 0, 50, FLAGS },
-    { "mcost",  "specify the middle cost for edge matching",        OFFSET(mcost),  AV_OPT_TYPE_INT, {.i64=1}, 0, 50, FLAGS },
-    { "dcost",  "specify the distance cost for edge matching",      OFFSET(dcost),  AV_OPT_TYPE_INT, {.i64=1}, 0, 50, FLAGS },
-    { "interp", "specify the type of interpolation",                OFFSET(interp), AV_OPT_TYPE_INT, {.i64=1}, 0, 2,     FLAGS, .unit = "interp" },
+    { "rslope", "specify the search radius for edge slope tracing", OFFSET(rslope), AV_OPT_TYPE_INT, {.i64=1}, 1, MAX_R, FLAGS, },
+    { "redge",  "specify the search radius for best edge matching", OFFSET(redge),  AV_OPT_TYPE_INT, {.i64=2}, 0, MAX_R, FLAGS, },
+    { "interp", "specify the type of interpolation",                OFFSET(interp), AV_OPT_TYPE_INT, {.i64=1}, 0, 2,     FLAGS, "interp" },
     CONST("2p", "two-point interpolation",  0, "interp"),
     CONST("4p", "four-point interpolation", 1, "interp"),
     CONST("6p", "six-point interpolation",  2, "interp"),
@@ -105,41 +101,49 @@ static const AVOption estdif_options[] = {
 
 AVFILTER_DEFINE_CLASS(estdif);
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
-    AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
-    AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P,
-    AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ420P,
-    AV_PIX_FMT_YUVJ411P,
-    AV_PIX_FMT_YUVA420P, AV_PIX_FMT_YUVA422P, AV_PIX_FMT_YUVA444P,
-    AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
-    AV_PIX_FMT_GRAY8,
-    AV_PIX_FMT_GRAY9, AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY14, AV_PIX_FMT_GRAY16,
-    AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
-    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
-    AV_PIX_FMT_YUV440P10,
-    AV_PIX_FMT_YUV420P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV444P12,
-    AV_PIX_FMT_YUV440P12,
-    AV_PIX_FMT_YUV420P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV444P14,
-    AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
-    AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12, AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
-    AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
-    AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
-    AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
-    AV_PIX_FMT_GBRAP10,   AV_PIX_FMT_GBRAP12,    AV_PIX_FMT_GBRAP16,
-    AV_PIX_FMT_NONE
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
+        AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
+        AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P,
+        AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ420P,
+        AV_PIX_FMT_YUVJ411P,
+        AV_PIX_FMT_YUVA420P, AV_PIX_FMT_YUVA422P, AV_PIX_FMT_YUVA444P,
+        AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
+        AV_PIX_FMT_GRAY8,
+        AV_PIX_FMT_GRAY9, AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY14, AV_PIX_FMT_GRAY16,
+        AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
+        AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
+        AV_PIX_FMT_YUV440P10,
+        AV_PIX_FMT_YUV420P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV444P12,
+        AV_PIX_FMT_YUV440P12,
+        AV_PIX_FMT_YUV420P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV444P14,
+        AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
+        AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12, AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
+        AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
+        AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
+        AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
+        AV_PIX_FMT_GBRAP10,   AV_PIX_FMT_GBRAP12,    AV_PIX_FMT_GBRAP16,
+        AV_PIX_FMT_NONE
+    };
+
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
+}
 
 static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
     AVFilterLink *inlink = ctx->inputs[0];
-    ESTDIFContext *s = ctx->priv;
 
-    outlink->time_base = av_mul_q(inlink->time_base, (AVRational){1, 2});
-    if (s->mode)
-        outlink->frame_rate = av_mul_q(inlink->frame_rate, (AVRational){2, 1});
+    outlink->time_base.num = inlink->time_base.num;
+    outlink->time_base.den = inlink->time_base.den * 2;
+    outlink->frame_rate.num = inlink->frame_rate.num * 2;
+    outlink->frame_rate.den = inlink->frame_rate.den;
 
     return 0;
 }
@@ -221,9 +225,10 @@ MID6(uint16_t, 16)
 #define DIFF(type, ss)                                         \
 static unsigned diff_##ss(const type *const prev,              \
                           const type *const next,              \
-                          int x, int y)                        \
+                          int end, int x, int k, int j)        \
 {                                                              \
-    return FFABS(prev[x] -  next[y]);                          \
+    return FFABS(prev[av_clip(x + k + j, 0, end)] -            \
+                 next[av_clip(x - k + j, 0, end)]);            \
 }
 
 DIFF(uint8_t, 8)
@@ -244,7 +249,7 @@ static unsigned cost_##ss(const type *const prev,              \
 COST(uint8_t, 8)
 COST(uint16_t, 16)
 
-#define INTERPOLATE(type, atype, amax, ss)                                     \
+#define INTERPOLATE(type, atype, max, ss)                                      \
 static void interpolate_##ss(ESTDIFContext *s, uint8_t *ddst,                  \
                              const uint8_t *const pprev_line,                  \
                              const uint8_t *const nnext_line,                  \
@@ -253,7 +258,7 @@ static void interpolate_##ss(ESTDIFContext *s, uint8_t *ddst,                  \
                              const uint8_t *const pprev3_line,                 \
                              const uint8_t *const nnext3_line,                 \
                              int x, int width, int rslope,                     \
-                             int redge, int depth,                             \
+                             int redge, unsigned h, int depth,                 \
                              int *K)                                           \
 {                                                                              \
     type *dst = (type *)ddst;                                                  \
@@ -264,60 +269,58 @@ static void interpolate_##ss(ESTDIFContext *s, uint8_t *ddst,                  \
     const type *const next2_line = (const type *const)nnext2_line;             \
     const type *const next3_line = (const type *const)nnext3_line;             \
     const int interp = s->interp;                                              \
-    const int ecost = s->ecost;                                                \
-    const int dcost = s->dcost;                                                \
-    const int mcost = s->mcost;                                                \
-    atype sd[S], sD[S], di = 0;                                                \
     const int end = width - 1;                                                 \
-    atype dmin = amax;                                                         \
-    int id = 0, iD = 0;                                                        \
+    const atype f = redge + 2;                                                 \
+    atype sd[S], sD[S], di = 0;                                                \
+    atype dmin = max;                                                          \
     int k = *K;                                                                \
                                                                                \
     for (int i = -rslope; i <= rslope && abs(k) > rslope; i++) {               \
         atype sum = 0;                                                         \
                                                                                \
         for (int j = -redge; j <= redge; j++) {                                \
-            const int xx = av_clip(x + i + j, 0, end);                         \
-            const int yy = av_clip(x - i + j, 0, end);                         \
-            sum += diff_##ss(prev_line,  next_line,  xx, yy);                  \
-            sum += diff_##ss(prev2_line, prev_line,  xx, yy);                  \
-            sum += diff_##ss(next_line,  next2_line, xx, yy);                  \
+            sum += diff_##ss(prev_line,  next_line,  end, x, i, j);            \
+            sum += diff_##ss(prev2_line, prev_line,  end, x, i, j);            \
+            sum += diff_##ss(next_line,  next2_line, end, x, i, j);            \
         }                                                                      \
                                                                                \
-        sD[i + rslope]  = ecost * sum;                                         \
-        sD[i + rslope] += mcost * cost_##ss(prev_line,  next_line,  end, x, i);\
-        sD[i + rslope] += dcost * abs(i);                                      \
+        sD[i + rslope]  =     sum;                                             \
+        sD[i + rslope] += f * cost_##ss(prev_line,  next_line,  end, x, i);    \
+        sD[i + rslope] += h * abs(i);                                          \
                                                                                \
-        if (dmin > sD[i + rslope]) {                                           \
-            dmin = sD[i + rslope];                                             \
-            di = 1;                                                            \
-            iD = i;                                                            \
-        }                                                                      \
+        dmin = FFMIN(sD[i + rslope], dmin);                                    \
     }                                                                          \
                                                                                \
     for (int i = -rslope; i <= rslope; i++) {                                  \
         atype sum = 0;                                                         \
                                                                                \
         for (int j = -redge; j <= redge; j++) {                                \
-            const int xx = av_clip(x + k + i + j, 0, end);                     \
-            const int yy = av_clip(x - k - i + j, 0, end);                     \
-            sum += diff_##ss(prev_line,  next_line,  xx, yy);                  \
-            sum += diff_##ss(prev2_line, prev_line,  xx, yy);                  \
-            sum += diff_##ss(next_line,  next2_line, xx, yy);                  \
+            sum += diff_##ss(prev_line,  next_line,  end, x, k + i, j);        \
+            sum += diff_##ss(prev2_line, prev_line,  end, x, k + i, j);        \
+            sum += diff_##ss(next_line,  next2_line, end, x, k + i, j);        \
         }                                                                      \
                                                                                \
-        sd[i + rslope]  = ecost * sum;                                         \
-        sd[i + rslope] += mcost * cost_##ss(prev_line, next_line, end, x, k+i);\
-        sd[i + rslope] += dcost * abs(k + i);                                  \
+        sd[i + rslope]  =     sum;                                             \
+        sd[i + rslope] += f * cost_##ss(prev_line, next_line, end, x, k + i);  \
+        sd[i + rslope] += h * abs(k + i);                                      \
                                                                                \
-        if (dmin > sd[i + rslope]) {                                           \
-            dmin = sd[i + rslope];                                             \
-            di = 0;                                                            \
-            id = i;                                                            \
+        dmin = FFMIN(sd[i + rslope], dmin);                                    \
+    }                                                                          \
+                                                                               \
+    for (int i = -rslope; i <= rslope && abs(k) > rslope; i++) {               \
+        if (dmin == sD[i + rslope]) {                                          \
+            di = 1;                                                            \
+            k = i;                                                             \
+            break;                                                             \
         }                                                                      \
     }                                                                          \
                                                                                \
-    k = di ? iD : k + id;                                                      \
+    for (int i = -rslope; i <= rslope && !di; i++) {                           \
+        if (dmin == sd[i + rslope]) {                                          \
+            k += i;                                                            \
+            break;                                                             \
+        }                                                                      \
+    }                                                                          \
                                                                                \
     dst[x] = s->mid_##ss[interp](prev_line, next_line,                         \
                                  prev2_line, next2_line,                       \
@@ -339,9 +342,10 @@ static int deinterlace_slice(AVFilterContext *ctx, void *arg,
     AVFrame *in = td->in;
     const int rslope = s->rslope;
     const int redge = s->redge;
+    const int half = s->half;
     const int depth = s->depth;
-    const int interlaced = !!(in->flags & AV_FRAME_FLAG_INTERLACED);
-    const int tff = (s->field == (s->parity == -1 ? interlaced ? !!(in->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) : 1 :
+    const int interlaced = in->interlaced_frame;
+    const int tff = (s->field == (s->parity == -1 ? interlaced ? in->top_field_first : 1 :
                                   s->parity ^ 1));
 
     for (int plane = 0; plane < s->nb_planes; plane++) {
@@ -417,7 +421,7 @@ static int deinterlace_slice(AVFilterContext *ctx, void *arg,
                                prev_line, next_line,
                                prev2_line, next2_line,
                                prev3_line, next3_line,
-                               x, width, rslope, redge, depth, &k);
+                               x, width, rslope, redge, half, depth, &k);
             }
 
             out_line += 2 * dst_linesize;
@@ -427,7 +431,7 @@ static int deinterlace_slice(AVFilterContext *ctx, void *arg,
     return 0;
 }
 
-static int filter(AVFilterContext *ctx, AVFrame *in, int64_t pts, int64_t duration)
+static int filter(AVFilterContext *ctx, int is_second, AVFrame *in)
 {
     ESTDIFContext *s = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
@@ -438,18 +442,12 @@ static int filter(AVFilterContext *ctx, AVFrame *in, int64_t pts, int64_t durati
     if (!out)
         return AVERROR(ENOMEM);
     av_frame_copy_props(out, in);
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
     out->interlaced_frame = 0;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-    out->flags &= ~AV_FRAME_FLAG_INTERLACED;
-    out->pts = pts;
-    out->duration = duration;
+    out->pts = s->pts;
 
     td.out = out; td.in = in;
-    ff_filter_execute(ctx, deinterlace_slice, &td, NULL,
-                      FFMIN(s->planeheight[1] / 2, s->nb_threads));
+    ctx->internal->execute(ctx, deinterlace_slice, &td, NULL,
+                           FFMIN(s->planeheight[1] / 2, s->nb_threads));
 
     if (s->mode)
         s->field = !s->field;
@@ -487,7 +485,7 @@ static int config_input(AVFilterLink *inlink)
     s->mid_16[0] = mid2_16;
     s->mid_16[1] = mid4_16;
     s->mid_16[2] = mid6_16;
-    s->max = (1 << (s->depth)) - 1;
+    s->half = 1 << (s->depth - 1);
 
     return 0;
 }
@@ -502,23 +500,23 @@ static int config_input(AVFilterLink *inlink)
         return 0;
     }
 
-    if ((s->deint && !(s->prev->flags & AV_FRAME_FLAG_INTERLACED)) || ctx->is_disabled) {
+    if ((s->deint && !in->interlaced_frame) || ctx->is_disabled) {
         s->prev->pts *= 2;
-        s->prev->duration *= 2;
         ret = ff_filter_frame(ctx->outputs[0], s->prev);
         s->prev = in;
         return ret;
     }
 
-    ret = filter(ctx, s->prev, s->prev->pts * 2,
-                 s->prev->duration * (s->mode ? 1 : 2));
+    s->pts = s->prev->pts * 2;
+    ret = filter(ctx, 0, s->prev);
     if (ret < 0 || s->mode == 0) {
         av_frame_free(&s->prev);
         s->prev = in;
         return ret;
     }
 
-    ret = filter(ctx, s->prev, s->prev->pts + in->pts, in->duration);
+    s->pts = s->prev->pts + in->pts;
+    ret = filter(ctx, 1, s->prev);
     av_frame_free(&s->prev);
     s->prev = in;
     return ret;
@@ -566,6 +564,7 @@ static const AVFilterPad estdif_inputs[] = {
         .filter_frame  = filter_frame,
         .config_props  = config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad estdif_outputs[] = {
@@ -575,17 +574,18 @@ static const AVFilterPad estdif_outputs[] = {
         .config_props  = config_output,
         .request_frame = request_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_estdif = {
+AVFilter ff_vf_estdif = {
     .name          = "estdif",
     .description   = NULL_IF_CONFIG_SMALL("Apply Edge Slope Tracing deinterlace."),
     .priv_size     = sizeof(ESTDIFContext),
     .priv_class    = &estdif_class,
     .uninit        = uninit,
-    FILTER_INPUTS(estdif_inputs),
-    FILTER_OUTPUTS(estdif_outputs),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .query_formats = query_formats,
+    .inputs        = estdif_inputs,
+    .outputs       = estdif_outputs,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL | AVFILTER_FLAG_SLICE_THREADS,
     .process_command = ff_filter_process_command,
 };

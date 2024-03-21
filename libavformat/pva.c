@@ -20,8 +20,6 @@
  */
 
 #include "avformat.h"
-#include "avio_internal.h"
-#include "demux.h"
 #include "internal.h"
 #include "mpeg.h"
 
@@ -63,7 +61,7 @@ static int pva_read_header(AVFormatContext *s) {
         return AVERROR(ENOMEM);
     st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
     st->codecpar->codec_id   = AV_CODEC_ID_MPEG2VIDEO;
-    ffstream(st)->need_parsing = AVSTREAM_PARSE_FULL;
+    st->need_parsing      = AVSTREAM_PARSE_FULL;
     avpriv_set_pts_info(st, 32, 1, 90000);
     av_add_index_entry(st, 0, 0, 0, 0, AVINDEX_KEYFRAME);
 
@@ -71,7 +69,7 @@ static int pva_read_header(AVFormatContext *s) {
         return AVERROR(ENOMEM);
     st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id   = AV_CODEC_ID_MP2;
-    ffstream(st)->need_parsing = AVSTREAM_PARSE_FULL;
+    st->need_parsing      = AVSTREAM_PARSE_FULL;
     avpriv_set_pts_info(st, 33, 1, 90000);
     av_add_index_entry(st, 0, 0, 0, 0, AVINDEX_KEYFRAME);
 
@@ -149,9 +147,9 @@ recover:
                 goto recover;
             }
 
-            ret = ffio_read_size(pb, pes_header_data, pes_header_data_length);
-            if (ret < 0)
-                return ret;
+            ret = avio_read(pb, pes_header_data, pes_header_data_length);
+            if (ret != pes_header_data_length)
+                return ret < 0 ? ret : AVERROR_INVALIDDATA;
             length -= 9 + pes_header_data_length;
 
             pes_packet_length -= 3 + pes_header_data_length;
@@ -229,9 +227,9 @@ static int64_t pva_read_timestamp(struct AVFormatContext *s, int stream_index,
     return res;
 }
 
-const FFInputFormat ff_pva_demuxer = {
-    .p.name         = "pva",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("TechnoTrend PVA"),
+AVInputFormat ff_pva_demuxer = {
+    .name           = "pva",
+    .long_name      = NULL_IF_CONFIG_SMALL("TechnoTrend PVA"),
     .priv_data_size = sizeof(PVAContext),
     .read_probe     = pva_probe,
     .read_header    = pva_read_header,

@@ -28,28 +28,22 @@
 #define av_bswap16 av_bswap16
 static av_always_inline av_const unsigned av_bswap16(unsigned x)
 {
-    unsigned y;
-
-    __asm__("rev16 %w0, %w1" : "=r"(y) : "r"(x));
-    return y;
+    __asm__("rev16 %w0, %w0" : "+r"(x));
+    return x;
 }
 
 #define av_bswap32 av_bswap32
 static av_always_inline av_const uint32_t av_bswap32(uint32_t x)
 {
-    uint32_t y;
-
-    __asm__("rev %w0, %w1" : "=r"(y) : "r"(x));
-    return y;
+    __asm__("rev %w0, %w0" : "+r"(x));
+    return x;
 }
 
 #define av_bswap64 av_bswap64
 static av_always_inline av_const uint64_t av_bswap64(uint64_t x)
 {
-    uint64_t y;
-
-    __asm__("rev %0, %1" : "=r"(y) : "r"(x));
-    return y;
+    __asm__("rev %0, %0" : "+r"(x));
+    return x;
 }
 
 #endif /* HAVE_INLINE_ASM */

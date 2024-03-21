@@ -17,7 +17,6 @@
  */
 
 #include "config.h"
-#include "config_components.h"
 #include "libavutil/attributes.h"
 #include "libavutil/common.h"
 #include "avcodec.h"
@@ -27,12 +26,24 @@
 #include "simple_idct.h"
 #include "xvididct.h"
 
-av_cold void ff_permute_scantable(uint8_t dst[64], const uint8_t src[64],
-                                  const uint8_t permutation[64])
+av_cold void ff_init_scantable(uint8_t *permutation, ScanTable *st,
+                               const uint8_t *src_scantable)
 {
-    for (int i = 0; i < 64; i++) {
-        int j = src[i];
-        dst[i] = permutation[j];
+    int i, end;
+
+    st->scantable = src_scantable;
+
+    for (i = 0; i < 64; i++) {
+        int j = src_scantable[i];
+        st->permutated[i] = permutation[j];
+    }
+
+    end = -1;
+    for (i = 0; i < 64; i++) {
+        int j = st->permutated[i];
+        if (j > end)
+            end = j;
+        st->raster_end[i] = end;
     }
 }
 
@@ -41,11 +52,10 @@ av_cold void ff_init_scantable_permutation(uint8_t *idct_permutation,
 {
     int i;
 
-#if ARCH_X86
-    if (ff_init_scantable_permutation_x86(idct_permutation,
-                                          perm_type))
-        return;
-#endif
+    if (ARCH_X86)
+        if (ff_init_scantable_permutation_x86(idct_permutation,
+                                              perm_type))
+            return;
 
     switch (perm_type) {
     case FF_IDCT_PERM_NONE:
@@ -70,7 +80,7 @@ av_cold void ff_init_scantable_permutation(uint8_t *idct_permutation,
     }
 }
 
-void ff_put_pixels_clamped_c(const int16_t *block, uint8_t *restrict pixels,
+void ff_put_pixels_clamped_c(const int16_t *block, uint8_t *av_restrict pixels,
                              ptrdiff_t line_size)
 {
     int i;
@@ -91,7 +101,7 @@ void ff_put_pixels_clamped_c(const int16_t *block, uint8_t *restrict pixels,
     }
 }
 
-static void put_pixels_clamped4_c(const int16_t *block, uint8_t *restrict pixels,
+static void put_pixels_clamped4_c(const int16_t *block, uint8_t *av_restrict pixels,
                                  int line_size)
 {
     int i;
@@ -108,7 +118,7 @@ static void put_pixels_clamped4_c(const int16_t *block, uint8_t *restrict pixels
     }
 }
 
-static void put_pixels_clamped2_c(const int16_t *block, uint8_t *restrict pixels,
+static void put_pixels_clamped2_c(const int16_t *block, uint8_t *av_restrict pixels,
                                  int line_size)
 {
     int i;
@@ -124,7 +134,7 @@ static void put_pixels_clamped2_c(const int16_t *block, uint8_t *restrict pixels
 }
 
 static void put_signed_pixels_clamped_c(const int16_t *block,
-                                        uint8_t *restrict pixels,
+                                        uint8_t *av_restrict pixels,
                                         ptrdiff_t line_size)
 {
     int i, j;
@@ -144,7 +154,7 @@ static void put_signed_pixels_clamped_c(const int16_t *block,
     }
 }
 
-void ff_add_pixels_clamped_c(const int16_t *block, uint8_t *restrict pixels,
+void ff_add_pixels_clamped_c(const int16_t *block, uint8_t *av_restrict pixels,
                              ptrdiff_t line_size)
 {
     int i;
@@ -164,7 +174,7 @@ void ff_add_pixels_clamped_c(const int16_t *block, uint8_t *restrict pixels,
     }
 }
 
-static void add_pixels_clamped4_c(const int16_t *block, uint8_t *restrict pixels,
+static void add_pixels_clamped4_c(const int16_t *block, uint8_t *av_restrict pixels,
                           int line_size)
 {
     int i;
@@ -180,7 +190,7 @@ static void add_pixels_clamped4_c(const int16_t *block, uint8_t *restrict pixels
     }
 }
 
-static void add_pixels_clamped2_c(const int16_t *block, uint8_t *restrict pixels,
+static void add_pixels_clamped2_c(const int16_t *block, uint8_t *av_restrict pixels,
                           int line_size)
 {
     int i;
@@ -227,7 +237,7 @@ static void ff_jref_idct1_add(uint8_t *dest, ptrdiff_t line_size, int16_t *block
 
 av_cold void ff_idctdsp_init(IDCTDSPContext *c, AVCodecContext *avctx)
 {
-    av_unused const unsigned high_bit_depth = avctx->bits_per_raw_sample > 8;
+    const unsigned high_bit_depth = avctx->bits_per_raw_sample > 8;
 
     if (avctx->lowres==1) {
         c->idct_put  = ff_jref_idct4_put;
@@ -277,6 +287,7 @@ av_cold void ff_idctdsp_init(IDCTDSPContext *c, AVCodecContext *avctx)
                 c->perm_type = FF_IDCT_PERM_NONE;
 #endif /* CONFIG_FAANIDCT */
             } else { // accurate/default
+                /* Be sure FF_IDCT_NONE will select this one, since it uses FF_IDCT_PERM_NONE */
                 c->idct_put  = ff_simple_idct_put_int16_8bit;
                 c->idct_add  = ff_simple_idct_add_int16_8bit;
                 c->idct      = ff_simple_idct_int16_8bit;
@@ -292,23 +303,18 @@ av_cold void ff_idctdsp_init(IDCTDSPContext *c, AVCodecContext *avctx)
     if (CONFIG_MPEG4_DECODER && avctx->idct_algo == FF_IDCT_XVID)
         ff_xvid_idct_init(c, avctx);
 
-#if ARCH_AARCH64
-    ff_idctdsp_init_aarch64(c, avctx, high_bit_depth);
-#elif ARCH_ALPHA
-    ff_idctdsp_init_alpha(c, avctx, high_bit_depth);
-#elif ARCH_ARM
-    ff_idctdsp_init_arm(c, avctx, high_bit_depth);
-#elif ARCH_PPC
-    ff_idctdsp_init_ppc(c, avctx, high_bit_depth);
-#elif ARCH_RISCV
-    ff_idctdsp_init_riscv(c, avctx, high_bit_depth);
-#elif ARCH_X86
-    ff_idctdsp_init_x86(c, avctx, high_bit_depth);
-#elif ARCH_MIPS
-    ff_idctdsp_init_mips(c, avctx, high_bit_depth);
-#elif ARCH_LOONGARCH
-    ff_idctdsp_init_loongarch(c, avctx, high_bit_depth);
-#endif
+    if (ARCH_AARCH64)
+        ff_idctdsp_init_aarch64(c, avctx, high_bit_depth);
+    if (ARCH_ALPHA)
+        ff_idctdsp_init_alpha(c, avctx, high_bit_depth);
+    if (ARCH_ARM)
+        ff_idctdsp_init_arm(c, avctx, high_bit_depth);
+    if (ARCH_PPC)
+        ff_idctdsp_init_ppc(c, avctx, high_bit_depth);
+    if (ARCH_X86)
+        ff_idctdsp_init_x86(c, avctx, high_bit_depth);
+    if (ARCH_MIPS)
+        ff_idctdsp_init_mips(c, avctx, high_bit_depth);
 
     ff_init_scantable_permutation(c->idct_permutation,
                                   c->perm_type);

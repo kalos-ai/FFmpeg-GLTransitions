@@ -24,14 +24,13 @@
 
 #include "apetag.h"
 #include "avformat.h"
-#include "mux.h"
 #include "wv.h"
 
 typedef struct WvMuxContext {
     int64_t samples;
 } WvMuxContext;
 
-static av_cold int wv_init(AVFormatContext *ctx)
+static av_cold int wv_write_header(AVFormatContext *ctx)
 {
     if (ctx->nb_streams > 1 ||
         ctx->streams[0]->codecpar->codec_id != AV_CODEC_ID_WAVPACK) {
@@ -77,16 +76,16 @@ static av_cold int wv_write_trailer(AVFormatContext *ctx)
     return 0;
 }
 
-const FFOutputFormat ff_wv_muxer = {
-    .p.name            = "wv",
-    .p.long_name       = NULL_IF_CONFIG_SMALL("raw WavPack"),
-    .p.mime_type       = "audio/x-wavpack",
-    .p.extensions      = "wv",
+AVOutputFormat ff_wv_muxer = {
+    .name              = "wv",
+    .long_name         = NULL_IF_CONFIG_SMALL("raw WavPack"),
+    .mime_type         = "audio/x-wavpack",
+    .extensions        = "wv",
     .priv_data_size    = sizeof(WvMuxContext),
-    .p.audio_codec     = AV_CODEC_ID_WAVPACK,
-    .p.video_codec     = AV_CODEC_ID_NONE,
-    .init              = wv_init,
+    .audio_codec       = AV_CODEC_ID_WAVPACK,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_header      = wv_write_header,
     .write_packet      = wv_write_packet,
     .write_trailer     = wv_write_trailer,
-    .p.flags           = AVFMT_NOTIMESTAMPS,
+    .flags             = AVFMT_NOTIMESTAMPS,
 };

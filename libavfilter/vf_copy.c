@@ -24,13 +24,19 @@
 #include "libavutil/imgutils.h"
 #include "libavutil/internal.h"
 #include "avfilter.h"
-#include "formats.h"
 #include "internal.h"
 #include "video.h"
 
 static int query_formats(AVFilterContext *ctx)
 {
-    return ff_set_common_formats(ctx, ff_formats_pixdesc_filter(0, AV_PIX_FMT_FLAG_HWACCEL));
+    AVFilterFormats *formats = NULL;
+    int ret;
+
+    ret = ff_formats_pixdesc_filter(&formats, 0,
+                                    AV_PIX_FMT_FLAG_HWACCEL);
+    if (ret < 0)
+        return ret;
+    return ff_set_common_formats(ctx, formats);
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
@@ -64,13 +70,21 @@ static const AVFilterPad avfilter_vf_copy_inputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_copy = {
+static const AVFilterPad avfilter_vf_copy_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_copy = {
     .name        = "copy",
     .description = NULL_IF_CONFIG_SMALL("Copy the input video unchanged to the output."),
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
-    FILTER_INPUTS(avfilter_vf_copy_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
+    .inputs      = avfilter_vf_copy_inputs,
+    .outputs     = avfilter_vf_copy_outputs,
+    .query_formats = query_formats,
 };

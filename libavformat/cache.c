@@ -29,10 +29,10 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
-#include "libavutil/file_open.h"
+#include "libavutil/internal.h"
 #include "libavutil/opt.h"
 #include "libavutil/tree.h"
-#include "avio.h"
+#include "avformat.h"
 #include <fcntl.h>
 #if HAVE_IO_H
 #include <io.h>

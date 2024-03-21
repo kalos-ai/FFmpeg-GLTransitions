@@ -27,12 +27,13 @@
  * @remark Development mentored by Benjamin Larson
  */
 
+#include <stddef.h>
+
 #include "libavutil/avassert.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/float_dsp.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "get_bits.h"
 #include "qcelpdata.h"
 #include "celp_filters.h"
@@ -86,8 +87,8 @@ static av_cold int qcelp_decode_init(AVCodecContext *avctx)
     QCELPContext *q = avctx->priv_data;
     int i;
 
-    av_channel_layout_uninit(&avctx->ch_layout);
-    avctx->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    avctx->channels       = 1;
+    avctx->channel_layout = AV_CH_LAYOUT_MONO;
     avctx->sample_fmt     = AV_SAMPLE_FMT_FLT;
 
     for (i = 0; i < 10; i++)
@@ -646,8 +647,8 @@ static qcelp_packet_rate determine_bitrate(AVCodecContext *avctx,
 static void warn_insufficient_frame_quality(AVCodecContext *avctx,
                                             const char *message)
 {
-    av_log(avctx, AV_LOG_WARNING, "Frame #%"PRId64", IFQ: %s\n",
-           avctx->frame_num, message);
+    av_log(avctx, AV_LOG_WARNING, "Frame #%d, IFQ: %s\n",
+           avctx->frame_number, message);
 }
 
 static void postfilter(QCELPContext *q, float *samples, float *lpc)
@@ -682,12 +683,13 @@ static void postfilter(QCELPContext *q, float *samples, float *lpc)
                              160, 0.9375, &q->postfilter_agc_mem);
 }
 
-static int qcelp_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int qcelp_decode_frame(AVCodecContext *avctx, void *data,
                               int *got_frame_ptr, AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
     QCELPContext *q    = avctx->priv_data;
+    AVFrame *frame     = data;
     float *outbuffer;
     int   i, ret;
     float quantized_lspf[10], lpc[10];
@@ -788,13 +790,13 @@ erasure:
     return buf_size;
 }
 
-const FFCodec ff_qcelp_decoder = {
-    .p.name         = "qcelp",
-    CODEC_LONG_NAME("QCELP / PureVoice"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_QCELP,
+AVCodec ff_qcelp_decoder = {
+    .name           = "qcelp",
+    .long_name      = NULL_IF_CONFIG_SMALL("QCELP / PureVoice"),
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_QCELP,
     .init           = qcelp_decode_init,
-    FF_CODEC_DECODE_CB(qcelp_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .decode         = qcelp_decode_frame,
+    .capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
     .priv_data_size = sizeof(QCELPContext),
 };

@@ -23,7 +23,6 @@
 #include "libavutil/intreadwrite.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
-#include "filters.h"
 #include "internal.h"
 
 enum FilterMode {
@@ -72,14 +71,14 @@ typedef struct ThreadDataHueSatMetrics {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 
 static const AVOption signalstats_options[] = {
-    {"stat", "set statistics filters", OFFSET(filters), AV_OPT_TYPE_FLAGS, {.i64=0}, 0, INT_MAX, FLAGS, .unit = "filters"},
-        {"tout", "analyze pixels for temporal outliers",                0, AV_OPT_TYPE_CONST, {.i64=1<<FILTER_TOUT}, 0, 0, FLAGS, .unit = "filters"},
-        {"vrep", "analyze video lines for vertical line repetition",    0, AV_OPT_TYPE_CONST, {.i64=1<<FILTER_VREP}, 0, 0, FLAGS, .unit = "filters"},
-        {"brng", "analyze for pixels outside of broadcast range",       0, AV_OPT_TYPE_CONST, {.i64=1<<FILTER_BRNG}, 0, 0, FLAGS, .unit = "filters"},
-    {"out", "set video filter", OFFSET(outfilter), AV_OPT_TYPE_INT, {.i64=FILTER_NONE}, -1, FILT_NUMB-1, FLAGS, .unit = "out"},
-        {"tout", "highlight pixels that depict temporal outliers",              0, AV_OPT_TYPE_CONST, {.i64=FILTER_TOUT}, 0, 0, FLAGS, .unit = "out"},
-        {"vrep", "highlight video lines that depict vertical line repetition",  0, AV_OPT_TYPE_CONST, {.i64=FILTER_VREP}, 0, 0, FLAGS, .unit = "out"},
-        {"brng", "highlight pixels that are outside of broadcast range",        0, AV_OPT_TYPE_CONST, {.i64=FILTER_BRNG}, 0, 0, FLAGS, .unit = "out"},
+    {"stat", "set statistics filters", OFFSET(filters), AV_OPT_TYPE_FLAGS, {.i64=0}, 0, INT_MAX, FLAGS, "filters"},
+        {"tout", "analyze pixels for temporal outliers",                0, AV_OPT_TYPE_CONST, {.i64=1<<FILTER_TOUT}, 0, 0, FLAGS, "filters"},
+        {"vrep", "analyze video lines for vertical line repetition",    0, AV_OPT_TYPE_CONST, {.i64=1<<FILTER_VREP}, 0, 0, FLAGS, "filters"},
+        {"brng", "analyze for pixels outside of broadcast range",       0, AV_OPT_TYPE_CONST, {.i64=1<<FILTER_BRNG}, 0, 0, FLAGS, "filters"},
+    {"out", "set video filter", OFFSET(outfilter), AV_OPT_TYPE_INT, {.i64=FILTER_NONE}, -1, FILT_NUMB-1, FLAGS, "out"},
+        {"tout", "highlight pixels that depict temporal outliers",              0, AV_OPT_TYPE_CONST, {.i64=FILTER_TOUT}, 0, 0, FLAGS, "out"},
+        {"vrep", "highlight video lines that depict vertical line repetition",  0, AV_OPT_TYPE_CONST, {.i64=FILTER_VREP}, 0, 0, FLAGS, "out"},
+        {"brng", "highlight pixels that are outside of broadcast range",        0, AV_OPT_TYPE_CONST, {.i64=FILTER_BRNG}, 0, 0, FLAGS, "out"},
     {"c",     "set highlight color", OFFSET(rgba_color), AV_OPT_TYPE_COLOR, {.str="yellow"}, .flags=FLAGS},
     {"color", "set highlight color", OFFSET(rgba_color), AV_OPT_TYPE_COLOR, {.str="yellow"}, .flags=FLAGS},
     {NULL}
@@ -117,21 +116,29 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&s->histsat);
 }
 
-// TODO: add more
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_YUV440P,
-    AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ411P,
-    AV_PIX_FMT_YUVJ440P,
-    AV_PIX_FMT_YUV444P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV420P9,
-    AV_PIX_FMT_YUV444P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV420P10,
-    AV_PIX_FMT_YUV440P10,
-    AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
-    AV_PIX_FMT_YUV440P12,
-    AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
-    AV_PIX_FMT_YUV444P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV420P16,
-    AV_PIX_FMT_NONE
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    // TODO: add more
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_YUV440P,
+        AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ411P,
+        AV_PIX_FMT_YUVJ440P,
+        AV_PIX_FMT_YUV444P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV420P9,
+        AV_PIX_FMT_YUV444P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV420P10,
+        AV_PIX_FMT_YUV440P10,
+        AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
+        AV_PIX_FMT_YUV440P12,
+        AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
+        AV_PIX_FMT_YUV444P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV420P16,
+        AV_PIX_FMT_NONE
+    };
+
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
+}
 
 static AVFrame *alloc_frame(enum AVPixelFormat pixfmt, int w, int h)
 {
@@ -481,8 +488,8 @@ static int compute_sat_hue_metrics8(AVFilterContext *ctx, void *arg, int jobnr, 
         for (i = 0; i < s->chromaw; i++) {
             const int yuvu = p_u[i];
             const int yuvv = p_v[i];
-            p_sat[i] = hypotf(yuvu - 128, yuvv - 128); // int or round?
-            ((int16_t*)p_hue)[i] = fmodf(floorf((180.f / M_PI) * atan2f(yuvu-128, yuvv-128) + 180.f), 360.f);
+            p_sat[i] = hypot(yuvu - 128, yuvv - 128); // int or round?
+            ((int16_t*)p_hue)[i] = fmod(floor((180 / M_PI) * atan2f(yuvu-128, yuvv-128) + 180), 360.);
         }
         p_u   += lsz_u;
         p_v   += lsz_v;
@@ -520,8 +527,8 @@ static int compute_sat_hue_metrics16(AVFilterContext *ctx, void *arg, int jobnr,
         for (i = 0; i < s->chromaw; i++) {
             const int yuvu = p_u[i];
             const int yuvv = p_v[i];
-            p_sat[i] = hypotf(yuvu - mid, yuvv - mid); // int or round?
-            ((int16_t*)p_hue)[i] = fmodf(floorf((180.f / M_PI) * atan2f(yuvu-mid, yuvv-mid) + 180.f), 360.f);
+            p_sat[i] = hypot(yuvu - mid, yuvv - mid); // int or round?
+            ((int16_t*)p_hue)[i] = fmod(floor((180 / M_PI) * atan2f(yuvu-mid, yuvv-mid) + 180), 360.);
         }
         p_u   += lsz_u;
         p_v   += lsz_v;
@@ -566,7 +573,7 @@ static int filter_frame8(AVFilterLink *link, AVFrame *in)
     int tothue = 0;
     int dify = 0, difu = 0, difv = 0;
     uint16_t masky = 0, masku = 0, maskv = 0;
-    int ret;
+
     int filtot[FILT_NUMB] = {0};
     AVFrame *prev;
 
@@ -589,20 +596,11 @@ static int filter_frame8(AVFilterLink *link, AVFrame *in)
 
     if (s->outfilter != FILTER_NONE) {
         out = av_frame_clone(in);
-        if (!out) {
-            av_frame_free(&in);
-            return AVERROR(ENOMEM);
-        }
-        ret = ff_inlink_make_frame_writable(link, &out);
-        if (ret < 0) {
-            av_frame_free(&out);
-            av_frame_free(&in);
-            return ret;
-        }
+        av_frame_make_writable(out);
     }
 
-    ff_filter_execute(ctx, compute_sat_hue_metrics8, &td_huesat,
-                      NULL, FFMIN(s->chromah, ff_filter_get_nb_threads(ctx)));
+    ctx->internal->execute(ctx, compute_sat_hue_metrics8, &td_huesat,
+                           NULL, FFMIN(s->chromah, ff_filter_get_nb_threads(ctx)));
 
     // Calculate luma histogram and difference with previous frame or field.
     memset(s->histy, 0, s->maxsize * sizeof(*s->histy));
@@ -650,8 +648,8 @@ static int filter_frame8(AVFilterLink *link, AVFrame *in)
                 .out = out != in && s->outfilter == fil ? out : NULL,
             };
             memset(s->jobs_rets, 0, s->nb_jobs * sizeof(*s->jobs_rets));
-            ff_filter_execute(ctx, filters_def[fil].process8,
-                              &td, s->jobs_rets, s->nb_jobs);
+            ctx->internal->execute(ctx, filters_def[fil].process8,
+                                   &td, s->jobs_rets, s->nb_jobs);
             for (i = 0; i < s->nb_jobs; i++)
                 filtot[fil] += s->jobs_rets[i];
         }
@@ -800,7 +798,7 @@ static int filter_frame16(AVFilterLink *link, AVFrame *in)
 
     int filtot[FILT_NUMB] = {0};
     AVFrame *prev;
-    int ret;
+
     AVFrame *sat = s->frame_sat;
     AVFrame *hue = s->frame_hue;
     const uint16_t *p_sat = (uint16_t *)sat->data[0];
@@ -820,20 +818,11 @@ static int filter_frame16(AVFilterLink *link, AVFrame *in)
 
     if (s->outfilter != FILTER_NONE) {
         out = av_frame_clone(in);
-        if (!out) {
-            av_frame_free(&in);
-            return AVERROR(ENOMEM);
-        }
-        ret = ff_inlink_make_frame_writable(link, &out);
-        if (ret < 0) {
-            av_frame_free(&out);
-            av_frame_free(&in);
-            return ret;
-        }
+        av_frame_make_writable(out);
     }
 
-    ff_filter_execute(ctx, compute_sat_hue_metrics16, &td_huesat,
-                      NULL, FFMIN(s->chromah, ff_filter_get_nb_threads(ctx)));
+    ctx->internal->execute(ctx, compute_sat_hue_metrics16, &td_huesat,
+                           NULL, FFMIN(s->chromah, ff_filter_get_nb_threads(ctx)));
 
     // Calculate luma histogram and difference with previous frame or field.
     memset(s->histy, 0, s->maxsize * sizeof(*s->histy));
@@ -881,8 +870,8 @@ static int filter_frame16(AVFilterLink *link, AVFrame *in)
                 .out = out != in && s->outfilter == fil ? out : NULL,
             };
             memset(s->jobs_rets, 0, s->nb_jobs * sizeof(*s->jobs_rets));
-            ff_filter_execute(ctx, filters_def[fil].process16,
-                              &td, s->jobs_rets, s->nb_jobs);
+            ctx->internal->execute(ctx, filters_def[fil].process16,
+                                   &td, s->jobs_rets, s->nb_jobs);
             for (i = 0; i < s->nb_jobs; i++)
                 filtot[fil] += s->jobs_rets[i];
         }
@@ -1011,6 +1000,7 @@ static const AVFilterPad signalstats_inputs[] = {
         .type           = AVMEDIA_TYPE_VIDEO,
         .filter_frame   = filter_frame,
     },
+    { NULL }
 };
 
 static const AVFilterPad signalstats_outputs[] = {
@@ -1019,17 +1009,18 @@ static const AVFilterPad signalstats_outputs[] = {
         .config_props   = config_output,
         .type           = AVMEDIA_TYPE_VIDEO,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_signalstats = {
+AVFilter ff_vf_signalstats = {
     .name          = "signalstats",
     .description   = "Generate statistics from video analysis.",
     .init          = init,
     .uninit        = uninit,
+    .query_formats = query_formats,
     .priv_size     = sizeof(SignalstatsContext),
-    FILTER_INPUTS(signalstats_inputs),
-    FILTER_OUTPUTS(signalstats_outputs),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .inputs        = signalstats_inputs,
+    .outputs       = signalstats_outputs,
     .priv_class    = &signalstats_class,
     .flags         = AVFILTER_FLAG_SLICE_THREADS,
 };

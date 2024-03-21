@@ -20,12 +20,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "dxva2_internal.h"
-#include "hwaccel_internal.h"
 #include "mpegutils.h"
-#include "mpegvideodec.h"
 #include "vc1.h"
 #include "vc1data.h"
 
@@ -40,11 +36,10 @@ struct dxva2_picture_context {
     unsigned               bitstream_size;
 };
 
-void ff_dxva2_vc1_fill_picture_parameters(AVCodecContext *avctx,
-                                    AVDXVAContext *ctx,
+static void fill_picture_parameters(AVCodecContext *avctx,
+                                    AVDXVAContext *ctx, const VC1Context *v,
                                     DXVA_PictureParameters *pp)
 {
-    const VC1Context *v = avctx->priv_data;
     const MpegEncContext *s = &v->s;
     const Picture *current_picture = s->current_picture_ptr;
     int intcomp = 0;
@@ -58,16 +53,16 @@ void ff_dxva2_vc1_fill_picture_parameters(AVCodecContext *avctx,
     }
 
     memset(pp, 0, sizeof(*pp));
+    pp->wDecodedPictureIndex    =
+    pp->wDeblockedPictureIndex  = ff_dxva2_get_surface_index(avctx, ctx, current_picture->f);
     if (s->pict_type != AV_PICTURE_TYPE_I && !v->bi_type)
-        pp->wForwardRefPictureIndex = ff_dxva2_get_surface_index(avctx, ctx, s->last_picture.f, 0);
+        pp->wForwardRefPictureIndex = ff_dxva2_get_surface_index(avctx, ctx, s->last_picture.f);
     else
         pp->wForwardRefPictureIndex = 0xffff;
     if (s->pict_type == AV_PICTURE_TYPE_B && !v->bi_type)
-        pp->wBackwardRefPictureIndex = ff_dxva2_get_surface_index(avctx, ctx, s->next_picture.f, 0);
+        pp->wBackwardRefPictureIndex = ff_dxva2_get_surface_index(avctx, ctx, s->next_picture.f);
     else
         pp->wBackwardRefPictureIndex = 0xffff;
-    pp->wDecodedPictureIndex    =
-    pp->wDeblockedPictureIndex  = ff_dxva2_get_surface_index(avctx, ctx, current_picture->f, 1);
     if (v->profile == PROFILE_ADVANCED) {
         /* It is the cropped width/height -1 of the frame */
         pp->wPicWidthInMBminus1 = avctx->width  - 1;
@@ -164,7 +159,7 @@ void ff_dxva2_vc1_fill_picture_parameters(AVCodecContext *avctx,
     pp->bBitstreamConcealmentMethod = 0;
 }
 
-void ff_dxva2_vc1_fill_slice(AVCodecContext *avctx, DXVA_SliceInfo *slice,
+static void fill_slice(AVCodecContext *avctx, DXVA_SliceInfo *slice,
                        unsigned position, unsigned size)
 {
     const VC1Context *v = avctx->priv_data;
@@ -321,9 +316,9 @@ static int dxva2_vc1_start_frame(AVCodecContext *avctx,
 
     if (!DXVA_CONTEXT_VALID(avctx, ctx))
         return -1;
-    av_assert0(ctx_pic);
+    assert(ctx_pic);
 
-    ff_dxva2_vc1_fill_picture_parameters(avctx, ctx, &ctx_pic->pp);
+    fill_picture_parameters(avctx, ctx, v, &ctx_pic->pp);
 
     ctx_pic->slice_count    = 0;
     ctx_pic->bitstream_size = 0;
@@ -357,7 +352,7 @@ static int dxva2_vc1_decode_slice(AVCodecContext *avctx,
     ctx_pic->bitstream_size += size;
 
     position = buffer - ctx_pic->bitstream;
-    ff_dxva2_vc1_fill_slice(avctx, &ctx_pic->slice[ctx_pic->slice_count++], position, size);
+    fill_slice(avctx, &ctx_pic->slice[ctx_pic->slice_count++], position, size);
     return 0;
 }
 
@@ -374,15 +369,17 @@ static int dxva2_vc1_end_frame(AVCodecContext *avctx)
                                     &ctx_pic->pp, sizeof(ctx_pic->pp),
                                     NULL, 0,
                                     commit_bitstream_and_slice_buffer);
+    if (!ret)
+        ff_mpeg_draw_horiz_band(&v->s, 0, avctx->height);
     return ret;
 }
 
 #if CONFIG_WMV3_DXVA2_HWACCEL
-const FFHWAccel ff_wmv3_dxva2_hwaccel = {
-    .p.name         = "wmv3_dxva2",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_WMV3,
-    .p.pix_fmt      = AV_PIX_FMT_DXVA2_VLD,
+const AVHWAccel ff_wmv3_dxva2_hwaccel = {
+    .name           = "wmv3_dxva2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_WMV3,
+    .pix_fmt        = AV_PIX_FMT_DXVA2_VLD,
     .init           = ff_dxva2_decode_init,
     .uninit         = ff_dxva2_decode_uninit,
     .start_frame    = dxva2_vc1_start_frame,
@@ -395,11 +392,11 @@ const FFHWAccel ff_wmv3_dxva2_hwaccel = {
 #endif
 
 #if CONFIG_VC1_DXVA2_HWACCEL
-const FFHWAccel ff_vc1_dxva2_hwaccel = {
-    .p.name         = "vc1_dxva2",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_VC1,
-    .p.pix_fmt      = AV_PIX_FMT_DXVA2_VLD,
+const AVHWAccel ff_vc1_dxva2_hwaccel = {
+    .name           = "vc1_dxva2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_VC1,
+    .pix_fmt        = AV_PIX_FMT_DXVA2_VLD,
     .init           = ff_dxva2_decode_init,
     .uninit         = ff_dxva2_decode_uninit,
     .start_frame    = dxva2_vc1_start_frame,
@@ -412,11 +409,11 @@ const FFHWAccel ff_vc1_dxva2_hwaccel = {
 #endif
 
 #if CONFIG_WMV3_D3D11VA_HWACCEL
-const FFHWAccel ff_wmv3_d3d11va_hwaccel = {
-    .p.name         = "wmv3_d3d11va",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_WMV3,
-    .p.pix_fmt      = AV_PIX_FMT_D3D11VA_VLD,
+const AVHWAccel ff_wmv3_d3d11va_hwaccel = {
+    .name           = "wmv3_d3d11va",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_WMV3,
+    .pix_fmt        = AV_PIX_FMT_D3D11VA_VLD,
     .init           = ff_dxva2_decode_init,
     .uninit         = ff_dxva2_decode_uninit,
     .start_frame    = dxva2_vc1_start_frame,
@@ -429,11 +426,11 @@ const FFHWAccel ff_wmv3_d3d11va_hwaccel = {
 #endif
 
 #if CONFIG_WMV3_D3D11VA2_HWACCEL
-const FFHWAccel ff_wmv3_d3d11va2_hwaccel = {
-    .p.name         = "wmv3_d3d11va2",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_WMV3,
-    .p.pix_fmt      = AV_PIX_FMT_D3D11,
+const AVHWAccel ff_wmv3_d3d11va2_hwaccel = {
+    .name           = "wmv3_d3d11va2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_WMV3,
+    .pix_fmt        = AV_PIX_FMT_D3D11,
     .init           = ff_dxva2_decode_init,
     .uninit         = ff_dxva2_decode_uninit,
     .start_frame    = dxva2_vc1_start_frame,
@@ -446,11 +443,11 @@ const FFHWAccel ff_wmv3_d3d11va2_hwaccel = {
 #endif
 
 #if CONFIG_VC1_D3D11VA_HWACCEL
-const FFHWAccel ff_vc1_d3d11va_hwaccel = {
-    .p.name         = "vc1_d3d11va",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_VC1,
-    .p.pix_fmt      = AV_PIX_FMT_D3D11VA_VLD,
+const AVHWAccel ff_vc1_d3d11va_hwaccel = {
+    .name           = "vc1_d3d11va",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_VC1,
+    .pix_fmt        = AV_PIX_FMT_D3D11VA_VLD,
     .init           = ff_dxva2_decode_init,
     .uninit         = ff_dxva2_decode_uninit,
     .start_frame    = dxva2_vc1_start_frame,
@@ -463,11 +460,11 @@ const FFHWAccel ff_vc1_d3d11va_hwaccel = {
 #endif
 
 #if CONFIG_VC1_D3D11VA2_HWACCEL
-const FFHWAccel ff_vc1_d3d11va2_hwaccel = {
-    .p.name         = "vc1_d3d11va2",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_VC1,
-    .p.pix_fmt      = AV_PIX_FMT_D3D11,
+const AVHWAccel ff_vc1_d3d11va2_hwaccel = {
+    .name           = "vc1_d3d11va2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_VC1,
+    .pix_fmt        = AV_PIX_FMT_D3D11,
     .init           = ff_dxva2_decode_init,
     .uninit         = ff_dxva2_decode_uninit,
     .start_frame    = dxva2_vc1_start_frame,

@@ -27,30 +27,13 @@
 #include <x265.h>
 #include <float.h>
 
-#include "libavutil/avassert.h"
-#include "libavutil/bprint.h"
-#include "libavutil/buffer.h"
 #include "libavutil/internal.h"
 #include "libavutil/common.h"
-#include "libavutil/mastering_display_metadata.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "encode.h"
 #include "internal.h"
 #include "packet_internal.h"
-#include "atsc_a53.h"
-#include "sei.h"
-
-typedef struct ReorderedData {
-    int64_t duration;
-
-    void        *frame_opaque;
-    AVBufferRef *frame_opaque_ref;
-
-    int in_use;
-} ReorderedData;
 
 typedef struct libx265Context {
     const AVClass *class;
@@ -66,14 +49,6 @@ typedef struct libx265Context {
     char *tune;
     char *profile;
     AVDictionary *x265_opts;
-
-    void *sei_data;
-    int sei_data_size;
-    int udu_sei;
-    int a53_cc;
-
-    ReorderedData *rd;
-    int         nb_rd;
 
     /**
      * If the encoder does not support ROI then warn the first time we
@@ -97,50 +72,11 @@ static int is_keyframe(NalUnitType naltype)
     }
 }
 
-static int rd_get(libx265Context *ctx)
-{
-    const int add = 16;
-
-    ReorderedData *tmp;
-    int idx;
-
-    for (int i = 0; i < ctx->nb_rd; i++)
-        if (!ctx->rd[i].in_use) {
-            ctx->rd[i].in_use = 1;
-            return i;
-        }
-
-    tmp = av_realloc_array(ctx->rd, ctx->nb_rd + add, sizeof(*ctx->rd));
-    if (!tmp)
-        return AVERROR(ENOMEM);
-    memset(tmp + ctx->nb_rd, 0, sizeof(*tmp) * add);
-
-    ctx->rd     = tmp;
-    ctx->nb_rd += add;
-
-    idx                 = ctx->nb_rd - add;
-    ctx->rd[idx].in_use = 1;
-
-    return idx;
-}
-
-static void rd_release(libx265Context *ctx, int idx)
-{
-    av_assert0(idx >= 0 && idx < ctx->nb_rd);
-    av_buffer_unref(&ctx->rd[idx].frame_opaque_ref);
-    memset(&ctx->rd[idx], 0, sizeof(ctx->rd[idx]));
-}
-
 static av_cold int libx265_encode_close(AVCodecContext *avctx)
 {
     libx265Context *ctx = avctx->priv_data;
 
     ctx->api->param_free(ctx->params);
-    av_freep(&ctx->sei_data);
-
-    for (int i = 0; i < ctx->nb_rd; i++)
-        rd_release(ctx, i);
-    av_freep(&ctx->rd);
 
     if (ctx->encoder)
         ctx->api->encoder_close(ctx->encoder);
@@ -178,94 +114,13 @@ static av_cold int libx265_param_parse_int(AVCodecContext *avctx,
     return 0;
 }
 
-static int handle_mdcv(const AVClass **avcl, const x265_api *api,
-                       x265_param *params,
-                       const AVMasteringDisplayMetadata *mdcv)
-{
-    int ret = AVERROR_BUG;
-    AVBPrint buf;
-    av_bprint_init(&buf, 0, AV_BPRINT_SIZE_AUTOMATIC);
-
-    // G(%hu,%hu)B(%hu,%hu)R(%hu,%hu)WP(%hu,%hu)L(%u,%u)
-    av_bprintf(
-        &buf,
-        "G(%"PRId64",%"PRId64")B(%"PRId64",%"PRId64")R(%"PRId64",%"PRId64")"
-        "WP(%"PRId64",%"PRId64")L(%"PRId64",%"PRId64")",
-        av_rescale_q(1, mdcv->display_primaries[1][0], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->display_primaries[1][1], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->display_primaries[2][0], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->display_primaries[2][1], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->display_primaries[0][0], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->display_primaries[0][1], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->white_point[0], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->white_point[1], (AVRational){ 1, 50000 }),
-        av_rescale_q(1, mdcv->max_luminance,  (AVRational){ 1, 10000 }),
-        av_rescale_q(1, mdcv->min_luminance,  (AVRational){ 1, 10000 }));
-
-    if (!av_bprint_is_complete(&buf)) {
-        av_log(avcl, AV_LOG_ERROR,
-          "MDCV string too long for its available space!\n");
-        ret = AVERROR(ENOMEM);
-        goto end;
-    }
-
-    if (api->param_parse(params, "master-display", buf.str) ==
-            X265_PARAM_BAD_VALUE) {
-        av_log(avcl, AV_LOG_ERROR,
-               "Invalid value \"%s\" for param \"master-display\".\n",
-               buf.str);
-        ret = AVERROR(EINVAL);
-        goto end;
-    }
-
-    ret = 0;
-
-end:
-    av_bprint_finalize(&buf, NULL);
-
-    return ret;
-}
-
-static int handle_side_data(AVCodecContext *avctx, const x265_api *api,
-                            x265_param *params)
-{
-    const AVFrameSideData *cll_sd =
-        av_frame_side_data_get(
-            (const AVFrameSideData **)avctx->decoded_side_data,
-            avctx->nb_decoded_side_data, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
-    const AVFrameSideData *mdcv_sd =
-        av_frame_side_data_get(
-            (const AVFrameSideData **)avctx->decoded_side_data,
-            avctx->nb_decoded_side_data,
-            AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
-
-    if (cll_sd) {
-        const AVContentLightMetadata *cll =
-            (AVContentLightMetadata *)cll_sd->data;
-
-        params->maxCLL  = cll->MaxCLL;
-        params->maxFALL = cll->MaxFALL;
-    }
-
-    if (mdcv_sd) {
-        int ret = handle_mdcv(
-            &avctx->av_class, api, params,
-            (AVMasteringDisplayMetadata *)mdcv_sd->data);
-        if (ret < 0)
-            return ret;
-    }
-
-    return 0;
-}
-
 static av_cold int libx265_encode_init(AVCodecContext *avctx)
 {
     libx265Context *ctx = avctx->priv_data;
     AVCPBProperties *cpb_props = NULL;
-    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(avctx->pix_fmt);
     int ret;
 
-    ctx->api = x265_api_get(desc->comp[0].depth);
+    ctx->api = x265_api_get(av_pix_fmt_desc_get(avctx->pix_fmt)->comp[0].depth);
     if (!ctx->api)
         ctx->api = x265_api_get(0);
 
@@ -299,13 +154,7 @@ static av_cold int libx265_encode_init(AVCodecContext *avctx)
         ctx->params->fpsDenom    = avctx->framerate.den;
     } else {
         ctx->params->fpsNum      = avctx->time_base.den;
-FF_DISABLE_DEPRECATION_WARNINGS
-        ctx->params->fpsDenom    = avctx->time_base.num
-#if FF_API_TICKS_PER_FRAME
-                                   * avctx->ticks_per_frame
-#endif
-                                   ;
-FF_ENABLE_DEPRECATION_WARNINGS
+        ctx->params->fpsDenom    = avctx->time_base.num * avctx->ticks_per_frame;
     }
     ctx->params->sourceWidth     = avctx->width;
     ctx->params->sourceHeight    = avctx->height;
@@ -326,15 +175,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     ctx->params->vui.bEnableVideoSignalTypePresentFlag = 1;
 
-    if (avctx->color_range != AVCOL_RANGE_UNSPECIFIED)
-        ctx->params->vui.bEnableVideoFullRangeFlag =
-            avctx->color_range == AVCOL_RANGE_JPEG;
-    else
-        ctx->params->vui.bEnableVideoFullRangeFlag =
-            (desc->flags & AV_PIX_FMT_FLAG_RGB) ||
-            avctx->pix_fmt == AV_PIX_FMT_YUVJ420P ||
-            avctx->pix_fmt == AV_PIX_FMT_YUVJ422P ||
-            avctx->pix_fmt == AV_PIX_FMT_YUVJ444P;
+    ctx->params->vui.bEnableVideoFullRangeFlag = avctx->pix_fmt == AV_PIX_FMT_YUVJ420P ||
+                                                 avctx->pix_fmt == AV_PIX_FMT_YUVJ422P ||
+                                                 avctx->pix_fmt == AV_PIX_FMT_YUVJ444P ||
+                                                 avctx->color_range == AVCOL_RANGE_JPEG;
 
     if ((avctx->color_primaries <= AVCOL_PRI_SMPTE432 &&
          avctx->color_primaries != AVCOL_PRI_UNSPECIFIED) ||
@@ -355,19 +199,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
         ctx->params->vui.matrixCoeffs            = avctx->colorspace;
     }
 
-    // chroma sample location values are to be ignored in case of non-4:2:0
-    // according to the specification, so we only write them out in case of
-    // 4:2:0 (log2_chroma_{w,h} == 1).
-    ctx->params->vui.bEnableChromaLocInfoPresentFlag =
-        avctx->chroma_sample_location != AVCHROMA_LOC_UNSPECIFIED &&
-        desc->log2_chroma_w == 1 && desc->log2_chroma_h == 1;
-
-    if (ctx->params->vui.bEnableChromaLocInfoPresentFlag) {
-        ctx->params->vui.chromaSampleLocTypeTopField =
-        ctx->params->vui.chromaSampleLocTypeBottomField =
-            avctx->chroma_sample_location - 1;
-    }
-
     if (avctx->sample_aspect_ratio.num > 0 && avctx->sample_aspect_ratio.den > 0) {
         char sar[12];
         int sar_num, sar_den;
@@ -382,47 +213,39 @@ FF_ENABLE_DEPRECATION_WARNINGS
         }
     }
 
-    switch (desc->log2_chroma_w) {
-    // 4:4:4, RGB. gray
-    case 0:
-        // gray
-        if (desc->nb_components == 1) {
-            if (ctx->api->api_build_number < 85) {
-                av_log(avctx, AV_LOG_ERROR,
-                       "libx265 version is %d, must be at least 85 for gray encoding.\n",
-                       ctx->api->api_build_number);
-                return AVERROR_INVALIDDATA;
-            }
-            ctx->params->internalCsp = X265_CSP_I400;
-            break;
-        }
-
-        // set identity matrix for RGB
-        if (desc->flags & AV_PIX_FMT_FLAG_RGB) {
-            ctx->params->vui.matrixCoeffs = AVCOL_SPC_RGB;
-            ctx->params->vui.bEnableVideoSignalTypePresentFlag  = 1;
-            ctx->params->vui.bEnableColorDescriptionPresentFlag = 1;
-        }
-
+    switch (avctx->pix_fmt) {
+    case AV_PIX_FMT_YUV420P:
+    case AV_PIX_FMT_YUV420P10:
+    case AV_PIX_FMT_YUV420P12:
+        ctx->params->internalCsp = X265_CSP_I420;
+        break;
+    case AV_PIX_FMT_YUV422P:
+    case AV_PIX_FMT_YUV422P10:
+    case AV_PIX_FMT_YUV422P12:
+        ctx->params->internalCsp = X265_CSP_I422;
+        break;
+    case AV_PIX_FMT_GBRP:
+    case AV_PIX_FMT_GBRP10:
+    case AV_PIX_FMT_GBRP12:
+        ctx->params->vui.matrixCoeffs = AVCOL_SPC_RGB;
+        ctx->params->vui.bEnableVideoSignalTypePresentFlag  = 1;
+        ctx->params->vui.bEnableColorDescriptionPresentFlag = 1;
+    case AV_PIX_FMT_YUV444P:
+    case AV_PIX_FMT_YUV444P10:
+    case AV_PIX_FMT_YUV444P12:
         ctx->params->internalCsp = X265_CSP_I444;
         break;
-    // 4:2:0, 4:2:2
-    case 1:
-        ctx->params->internalCsp = desc->log2_chroma_h == 1 ?
-            X265_CSP_I420 : X265_CSP_I422;
+    case AV_PIX_FMT_GRAY8:
+    case AV_PIX_FMT_GRAY10:
+    case AV_PIX_FMT_GRAY12:
+        if (ctx->api->api_build_number < 85) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "libx265 version is %d, must be at least 85 for gray encoding.\n",
+                   ctx->api->api_build_number);
+            return AVERROR_INVALIDDATA;
+        }
+        ctx->params->internalCsp = X265_CSP_I400;
         break;
-    default:
-        av_log(avctx, AV_LOG_ERROR,
-               "Pixel format '%s' cannot be mapped to a libx265 CSP!\n",
-               desc->name);
-        return AVERROR_BUG;
-    }
-
-    ret = handle_side_data(avctx, ctx->api, ctx->params);
-    if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "Failed handling side data! (%s)\n",
-               av_err2str(ret));
-        return ret;
     }
 
     if (ctx->crf >= 0) {
@@ -442,6 +265,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
             return ret;
     }
 
+#if X265_BUILD >= 89
     if (avctx->qmin >= 0) {
         ret = libx265_param_parse_int(avctx, "qpmin", avctx->qmin);
         if (ret < 0)
@@ -452,6 +276,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
         if (ret < 0)
             return ret;
     }
+#endif
     if (avctx->max_qdiff >= 0) {
         ret = libx265_param_parse_int(avctx, "qpstep", avctx->max_qdiff);
         if (ret < 0)
@@ -481,7 +306,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
     ctx->params->rc.vbvBufferSize = avctx->rc_buffer_size / 1000;
     ctx->params->rc.vbvMaxBitrate = avctx->rc_max_rate    / 1000;
 
-    cpb_props = ff_encode_add_cpb_side_data(avctx);
+    cpb_props = ff_add_cpb_side_data(avctx);
     if (!cpb_props)
         return AVERROR(ENOMEM);
     cpb_props->buffer_size = ctx->params->rc.vbvBufferSize * 1000;
@@ -610,7 +435,7 @@ static av_cold int libx265_encode_set_roi(libx265Context *ctx, const AVFrame *fr
             }
             nb_rois = sd->size / roi_size;
 
-            qoffsets = av_calloc(mbx * mby, sizeof(*qoffsets));
+            qoffsets = av_mallocz_array(mbx * mby, sizeof(*qoffsets));
             if (!qoffsets)
                 return AVERROR(ENOMEM);
 
@@ -646,22 +471,6 @@ static av_cold int libx265_encode_set_roi(libx265Context *ctx, const AVFrame *fr
     return 0;
 }
 
-static void free_picture(libx265Context *ctx, x265_picture *pic)
-{
-    x265_sei *sei = &pic->userSEI;
-    for (int i = 0; i < sei->numPayloads; i++)
-        av_free(sei->payloads[i].payload);
-
-    if (pic->userData) {
-        int idx = (int)(intptr_t)pic->userData - 1;
-        rd_release(ctx, idx);
-        pic->userData = NULL;
-    }
-
-    av_freep(&pic->quantOffsets);
-    sei->numPayloads = 0;
-}
-
 static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                                 const AVFrame *pic, int *got_packet)
 {
@@ -669,7 +478,6 @@ static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     x265_picture x265pic;
     x265_picture x265pic_out = { 0 };
     x265_nal *nal;
-    x265_sei *sei;
     uint8_t *dst;
     int pict_type;
     int payload = 0;
@@ -679,13 +487,7 @@ static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 
     ctx->api->picture_init(ctx->params, &x265pic);
 
-    sei = &x265pic.userSEI;
-    sei->numPayloads = 0;
-
     if (pic) {
-        ReorderedData *rd;
-        int rd_idx;
-
         for (i = 0; i < 3; i++) {
            x265pic.planes[i] = pic->data[i];
            x265pic.stride[i] = pic->linesize[i];
@@ -704,92 +506,20 @@ static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         if (ret < 0)
             return ret;
 
-        rd_idx = rd_get(ctx);
-        if (rd_idx < 0) {
-            free_picture(ctx, &x265pic);
-            return rd_idx;
-        }
-        rd = &ctx->rd[rd_idx];
-
-        rd->duration         = pic->duration;
-        if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
-            rd->frame_opaque = pic->opaque;
-            ret = av_buffer_replace(&rd->frame_opaque_ref, pic->opaque_ref);
-            if (ret < 0) {
-                rd_release(ctx, rd_idx);
-                free_picture(ctx, &x265pic);
-                return ret;
+        if (pic->reordered_opaque) {
+            x265pic.userData = av_malloc(sizeof(pic->reordered_opaque));
+            if (!x265pic.userData) {
+                av_freep(&x265pic.quantOffsets);
+                return AVERROR(ENOMEM);
             }
-        }
 
-        x265pic.userData = (void*)(intptr_t)(rd_idx + 1);
-
-        if (ctx->a53_cc) {
-            void *sei_data;
-            size_t sei_size;
-
-            ret = ff_alloc_a53_sei(pic, 0, &sei_data, &sei_size);
-            if (ret < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Not enough memory for closed captions, skipping\n");
-            } else if (sei_data) {
-                void *tmp;
-                x265_sei_payload *sei_payload;
-
-                tmp = av_fast_realloc(ctx->sei_data,
-                        &ctx->sei_data_size,
-                        (sei->numPayloads + 1) * sizeof(*sei_payload));
-                if (!tmp) {
-                    av_free(sei_data);
-                    free_picture(ctx, &x265pic);
-                    return AVERROR(ENOMEM);
-                }
-                ctx->sei_data = tmp;
-                sei->payloads = ctx->sei_data;
-                sei_payload = &sei->payloads[sei->numPayloads];
-                sei_payload->payload = sei_data;
-                sei_payload->payloadSize = sei_size;
-                sei_payload->payloadType = SEI_TYPE_USER_DATA_REGISTERED_ITU_T_T35;
-                sei->numPayloads++;
-            }
-        }
-
-        if (ctx->udu_sei) {
-            for (i = 0; i < pic->nb_side_data; i++) {
-                AVFrameSideData *side_data = pic->side_data[i];
-                void *tmp;
-                x265_sei_payload *sei_payload;
-
-                if (side_data->type != AV_FRAME_DATA_SEI_UNREGISTERED)
-                    continue;
-
-                tmp = av_fast_realloc(ctx->sei_data,
-                        &ctx->sei_data_size,
-                        (sei->numPayloads + 1) * sizeof(*sei_payload));
-                if (!tmp) {
-                    free_picture(ctx, &x265pic);
-                    return AVERROR(ENOMEM);
-                }
-                ctx->sei_data = tmp;
-                sei->payloads = ctx->sei_data;
-                sei_payload = &sei->payloads[sei->numPayloads];
-                sei_payload->payload = av_memdup(side_data->data, side_data->size);
-                if (!sei_payload->payload) {
-                    free_picture(ctx, &x265pic);
-                    return AVERROR(ENOMEM);
-                }
-                sei_payload->payloadSize = side_data->size;
-                /* Equal to libx265 USER_DATA_UNREGISTERED */
-                sei_payload->payloadType = SEI_TYPE_USER_DATA_UNREGISTERED;
-                sei->numPayloads++;
-            }
+            memcpy(x265pic.userData, &pic->reordered_opaque, sizeof(pic->reordered_opaque));
         }
     }
 
     ret = ctx->api->encoder_encode(ctx->encoder, &nal, &nnal,
                                    pic ? &x265pic : NULL, &x265pic_out);
 
-    for (i = 0; i < sei->numPayloads; i++)
-        av_free(sei->payloads[i].payload);
     av_freep(&x265pic.quantOffsets);
 
     if (ret < 0)
@@ -801,7 +531,7 @@ static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     for (i = 0; i < nnal; i++)
         payload += nal[i].sizeBytes;
 
-    ret = ff_get_encode_buffer(avctx, pkt, payload, 0);
+    ret = ff_alloc_packet2(avctx, pkt, payload, payload);
     if (ret < 0) {
         av_log(avctx, AV_LOG_ERROR, "Error getting output packet.\n");
         return ret;
@@ -836,6 +566,12 @@ static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         return AVERROR_EXTERNAL;
     }
 
+#if FF_API_CODED_FRAME
+FF_DISABLE_DEPRECATION_WARNINGS
+    avctx->coded_frame->pict_type = pict_type;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
+
 #if X265_BUILD >= 130
     if (x265pic_out.sliceType == X265_TYPE_B)
 #else
@@ -846,19 +582,10 @@ static int libx265_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     ff_side_data_set_encoder_stats(pkt, x265pic_out.frameData.qp * FF_QP2LAMBDA, NULL, 0, pict_type);
 
     if (x265pic_out.userData) {
-        int idx = (int)(intptr_t)x265pic_out.userData - 1;
-        ReorderedData *rd = &ctx->rd[idx];
-
-        pkt->duration           = rd->duration;
-
-        if (avctx->flags & AV_CODEC_FLAG_COPY_OPAQUE) {
-            pkt->opaque          = rd->frame_opaque;
-            pkt->opaque_ref      = rd->frame_opaque_ref;
-            rd->frame_opaque_ref = NULL;
-        }
-
-        rd_release(ctx, idx);
-    }
+        memcpy(&avctx->reordered_opaque, x265pic_out.userData, sizeof(avctx->reordered_opaque));
+        av_freep(&x265pic_out.userData);
+    } else
+        avctx->reordered_opaque = 0;
 
     *got_packet = 1;
     return 0;
@@ -915,14 +642,14 @@ static const enum AVPixelFormat x265_csp_twelve[] = {
     AV_PIX_FMT_NONE
 };
 
-static av_cold void libx265_encode_init_csp(FFCodec *codec)
+static av_cold void libx265_encode_init_csp(AVCodec *codec)
 {
     if (x265_api_get(12))
-        codec->p.pix_fmts = x265_csp_twelve;
+        codec->pix_fmts = x265_csp_twelve;
     else if (x265_api_get(10))
-        codec->p.pix_fmts = x265_csp_ten;
+        codec->pix_fmts = x265_csp_ten;
     else if (x265_api_get(8))
-        codec->p.pix_fmts = x265_csp_eight;
+        codec->pix_fmts = x265_csp_eight;
 }
 
 #define OFFSET(x) offsetof(libx265Context, x)
@@ -934,8 +661,6 @@ static const AVOption options[] = {
     { "preset",      "set the x265 preset",                                                         OFFSET(preset),    AV_OPT_TYPE_STRING, { 0 }, 0, 0, VE },
     { "tune",        "set the x265 tune parameter",                                                 OFFSET(tune),      AV_OPT_TYPE_STRING, { 0 }, 0, 0, VE },
     { "profile",     "set the x265 profile",                                                        OFFSET(profile),   AV_OPT_TYPE_STRING, { 0 }, 0, 0, VE },
-    { "udu_sei",     "Use user data unregistered SEI if available",                                 OFFSET(udu_sei),   AV_OPT_TYPE_BOOL,   { .i64 = 0 }, 0, 1, VE },
-    { "a53cc",       "Use A53 Closed Captions (if available)",                                      OFFSET(a53_cc),    AV_OPT_TYPE_BOOL,   { .i64 = 1 }, 0, 1, VE },
     { "x265-params", "set the x265 configuration using a :-separated list of key=value parameters", OFFSET(x265_opts), AV_OPT_TYPE_DICT,   { 0 }, 0, 0, VE },
     { NULL }
 };
@@ -947,7 +672,7 @@ static const AVClass class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-static const FFCodecDefault x265_defaults[] = {
+static const AVCodecDefault x265_defaults[] = {
     { "b", "0" },
     { "bf", "-1" },
     { "g", "-1" },
@@ -963,22 +688,20 @@ static const FFCodecDefault x265_defaults[] = {
     { NULL },
 };
 
-FFCodec ff_libx265_encoder = {
-    .p.name           = "libx265",
-    CODEC_LONG_NAME("libx265 H.265 / HEVC"),
-    .p.type           = AVMEDIA_TYPE_VIDEO,
-    .p.id             = AV_CODEC_ID_HEVC,
-    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
-                        AV_CODEC_CAP_OTHER_THREADS |
-                        AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
-    .p.priv_class     = &class,
-    .p.wrapper_name   = "libx265",
+AVCodec ff_libx265_encoder = {
+    .name             = "libx265",
+    .long_name        = NULL_IF_CONFIG_SMALL("libx265 H.265 / HEVC"),
+    .type             = AVMEDIA_TYPE_VIDEO,
+    .id               = AV_CODEC_ID_HEVC,
     .init             = libx265_encode_init,
     .init_static_data = libx265_encode_init_csp,
-    FF_CODEC_ENCODE_CB(libx265_encode_frame),
+    .encode2          = libx265_encode_frame,
     .close            = libx265_encode_close,
     .priv_data_size   = sizeof(libx265Context),
+    .priv_class       = &class,
     .defaults         = x265_defaults,
-    .caps_internal    = FF_CODEC_CAP_NOT_INIT_THREADSAFE |
-                        FF_CODEC_CAP_AUTO_THREADS,
+    .capabilities     = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_OTHER_THREADS |
+                        AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+    .caps_internal    = FF_CODEC_CAP_AUTO_THREADS,
+    .wrapper_name     = "libx265",
 };

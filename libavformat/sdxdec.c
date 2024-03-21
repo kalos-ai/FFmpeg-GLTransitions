@@ -22,7 +22,6 @@
 #include "libavutil/avstring.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "pcm.h"
 
@@ -55,7 +54,7 @@ static int sdx_read_header(AVFormatContext *s)
         return AVERROR(ENOMEM);
 
     st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->ch_layout.nb_channels = 1;
+    st->codecpar->channels = 1;
     st->codecpar->sample_rate = avio_rl32(s->pb);
     switch (depth) {
     case 8:
@@ -79,13 +78,13 @@ static int sdx_read_header(AVFormatContext *s)
     return 0;
 }
 
-const FFInputFormat ff_sdx_demuxer = {
-    .p.name         = "sdx",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Sample Dump eXchange"),
-    .p.extensions   = "sdx",
-    .p.flags        = AVFMT_GENERIC_INDEX,
+AVInputFormat ff_sdx_demuxer = {
+    .name           = "sdx",
+    .long_name      = NULL_IF_CONFIG_SMALL("Sample Dump eXchange"),
     .read_probe     = sdx_probe,
     .read_header    = sdx_read_header,
     .read_packet    = ff_pcm_read_packet,
     .read_seek      = ff_pcm_read_seek,
+    .extensions     = "sdx",
+    .flags          = AVFMT_GENERIC_INDEX,
 };

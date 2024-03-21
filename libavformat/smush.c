@@ -23,7 +23,6 @@
 
 #include "avformat.h"
 #include "avio.h"
-#include "demux.h"
 #include "internal.h"
 
 typedef struct SMUSHContext {
@@ -179,7 +178,8 @@ static int smush_read_header(AVFormatContext *ctx)
         ast->codecpar->codec_id    = AV_CODEC_ID_ADPCM_VIMA;
         ast->codecpar->codec_tag   = 0;
         ast->codecpar->sample_rate = sample_rate;
-        ast->codecpar->ch_layout.nb_channels = channels;
+        ast->codecpar->channels    = channels;
+
         avpriv_set_pts_info(ast, 64, 1, ast->codecpar->sample_rate);
     }
 
@@ -242,9 +242,9 @@ static int smush_read_packet(AVFormatContext *ctx, AVPacket *pkt)
     return 0;
 }
 
-const FFInputFormat ff_smush_demuxer = {
-    .p.name         = "smush",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("LucasArts Smush"),
+AVInputFormat ff_smush_demuxer = {
+    .name           = "smush",
+    .long_name      = NULL_IF_CONFIG_SMALL("LucasArts Smush"),
     .priv_data_size = sizeof(SMUSHContext),
     .read_probe     = smush_read_probe,
     .read_header    = smush_read_header,

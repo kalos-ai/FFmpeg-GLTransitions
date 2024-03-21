@@ -21,7 +21,6 @@
 
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 typedef struct SDSContext {
@@ -111,9 +110,9 @@ static int sds_read_header(AVFormatContext *ctx)
     avio_skip(pb, 11);
 
     st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->ch_layout.nb_channels = 1;
+    st->codecpar->channels = 1;
     st->codecpar->sample_rate = sample_period ? 1000000000 / sample_period : 16000;
-    st->duration = av_rescale((avio_size(pb) - 21) / 127,  s->size, 4);
+    st->duration = (avio_size(pb) - 21) / (127) * s->size / 4;
 
     avpriv_set_pts_info(st, 64, 1, st->codecpar->sample_rate);
 
@@ -154,13 +153,13 @@ static int sds_read_packet(AVFormatContext *ctx, AVPacket *pkt)
     return ret;
 }
 
-const FFInputFormat ff_sds_demuxer = {
-    .p.name         = "sds",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("MIDI Sample Dump Standard"),
-    .p.extensions   = "sds",
-    .p.flags        = AVFMT_GENERIC_INDEX,
+AVInputFormat ff_sds_demuxer = {
+    .name           = "sds",
+    .long_name      = NULL_IF_CONFIG_SMALL("MIDI Sample Dump Standard"),
     .priv_data_size = sizeof(SDSContext),
     .read_probe     = sds_probe,
     .read_header    = sds_read_header,
     .read_packet    = sds_read_packet,
+    .extensions     = "sds",
+    .flags          = AVFMT_GENERIC_INDEX,
 };

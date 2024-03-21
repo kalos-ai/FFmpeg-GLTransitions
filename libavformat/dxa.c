@@ -23,7 +23,6 @@
 
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "riff.h"
 
@@ -80,7 +79,7 @@ static int dxa_read_header(AVFormatContext *s)
     if(fps > 0){
         den = 1000;
         num = fps;
-    }else if (fps < 0 && fps > INT_MIN){
+    }else if (fps < 0){
         den = 100000;
         num = -fps;
     }else{
@@ -119,12 +118,9 @@ static int dxa_read_header(AVFormatContext *s)
             if(tag == MKTAG('d', 'a', 't', 'a')) break;
             avio_skip(pb, fsize);
         }
-        c->bpc = (fsize + (int64_t)c->frames - 1) / c->frames;
-        if(ast->codecpar->block_align) {
-            if (c->bpc > INT_MAX - ast->codecpar->block_align + 1)
-                return AVERROR_INVALIDDATA;
+        c->bpc = (fsize + c->frames - 1) / c->frames;
+        if(ast->codecpar->block_align)
             c->bpc = ((c->bpc + ast->codecpar->block_align - 1) / ast->codecpar->block_align) * ast->codecpar->block_align;
-        }
         c->bytes_left = fsize;
         c->wavpos = avio_tell(pb);
         avio_seek(pb, c->vidpos, SEEK_SET);
@@ -230,9 +226,9 @@ static int dxa_read_packet(AVFormatContext *s, AVPacket *pkt)
     return AVERROR_EOF;
 }
 
-const FFInputFormat ff_dxa_demuxer = {
-    .p.name         = "dxa",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("DXA"),
+AVInputFormat ff_dxa_demuxer = {
+    .name           = "dxa",
+    .long_name      = NULL_IF_CONFIG_SMALL("DXA"),
     .priv_data_size = sizeof(DXAContext),
     .read_probe     = dxa_probe,
     .read_header    = dxa_read_header,

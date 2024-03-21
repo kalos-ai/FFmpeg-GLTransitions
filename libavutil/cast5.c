@@ -18,13 +18,9 @@
  * License along with FFmpeg; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-
-#include <string.h>
-
 #include "cast5.h"
-#include "error.h"
+#include "common.h"
 #include "intreadwrite.h"
-#include "mem.h"
 #include "attributes.h"
 
 #define IA(x) ((x) >> 24)
@@ -32,7 +28,7 @@
 #define IC(x) (((x) >> 8) & 0xff)
 #define ID(x) ((x) & 0xff)
 
-#define LR(x, c) (((x) << (c)) | ((x) >> ((32 - (c)) & 31)))
+#define LR(x, c) (((x) << (c)) | ((x) >> (32 - (c))))
 
 #define F3(l, r, i)                                                                                  \
     do {                                                                                             \

@@ -52,8 +52,7 @@
  * Reference: libavcodec/aacdec.c
  */
 
-#include "libavutil/attributes.h"
-#include "libavcodec/aacdec.h"
+#include "libavcodec/aac.h"
 #include "aacdec_mips.h"
 #include "libavcodec/aactab.h"
 #include "libavcodec/sinewin.h"
@@ -112,7 +111,7 @@ static av_always_inline int lcg_random(unsigned previous_val)
     return v.s;
 }
 
-static void imdct_and_windowing_mips(AACDecContext *ac, SingleChannelElement *sce)
+static void imdct_and_windowing_mips(AACContext *ac, SingleChannelElement *sce)
 {
     IndividualChannelStream *ics = &sce->ics;
     float *in    = sce->coeffs;
@@ -126,9 +125,9 @@ static void imdct_and_windowing_mips(AACDecContext *ac, SingleChannelElement *sc
 
     if (ics->window_sequence[0] == EIGHT_SHORT_SEQUENCE) {
         for (i = 0; i < 1024; i += 128)
-            ac->mdct128_fn(ac->mdct128, buf + i, in + i, sizeof(float));
+            ac->mdct_small.imdct_half(&ac->mdct_small, buf + i, in + i);
     } else
-        ac->mdct1024_fn(ac->mdct1024, buf, in, sizeof(float));
+        ac->mdct.imdct_half(&ac->mdct, buf, in);
 
     /* window overlapping
      * NOTE: To simplify the overlapping code, all 'meaningless' short to long
@@ -224,7 +223,7 @@ static void imdct_and_windowing_mips(AACDecContext *ac, SingleChannelElement *sc
     }
 }
 
-static void apply_ltp_mips(AACDecContext *ac, SingleChannelElement *sce)
+static void apply_ltp_mips(AACContext *ac, SingleChannelElement *sce)
 {
     const LongTermPrediction *ltp = &sce->ics.ltp;
     const uint16_t *offsets = sce->ics.swb_offset;
@@ -334,7 +333,7 @@ static av_always_inline void fmul_and_reverse(float *dst, const float *src0, con
     }
 }
 
-static void update_ltp_mips(AACDecContext *ac, SingleChannelElement *sce)
+static void update_ltp_mips(AACContext *ac, SingleChannelElement *sce)
 {
     IndividualChannelStream *ics = &sce->ics;
     float *saved     = sce->saved;
@@ -431,7 +430,7 @@ static void update_ltp_mips(AACDecContext *ac, SingleChannelElement *sce)
 #endif /* HAVE_MIPSFPU */
 #endif /* HAVE_INLINE_ASM */
 
-void ff_aacdec_init_mips(AACDecContext *c)
+void ff_aacdec_init_mips(AACContext *c)
 {
 #if HAVE_INLINE_ASM
 #if HAVE_MIPSFPU

@@ -69,18 +69,18 @@ static const AVOption stereotools_options[] = {
     { "muter",       "mute R",           OFFSET(mute_r),      AV_OPT_TYPE_BOOL,   {.i64=0},   0,          1, A },
     { "phasel",      "phase L",          OFFSET(phase_l),     AV_OPT_TYPE_BOOL,   {.i64=0},   0,          1, A },
     { "phaser",      "phase R",          OFFSET(phase_r),     AV_OPT_TYPE_BOOL,   {.i64=0},   0,          1, A },
-    { "mode",        "set stereo mode",  OFFSET(mode),        AV_OPT_TYPE_INT,    {.i64=0},   0,         10, A, .unit = "mode" },
-    {     "lr>lr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=0},   0,          0, A, .unit = "mode" },
-    {     "lr>ms",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=1},   0,          0, A, .unit = "mode" },
-    {     "ms>lr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=2},   0,          0, A, .unit = "mode" },
-    {     "lr>ll",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=3},   0,          0, A, .unit = "mode" },
-    {     "lr>rr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=4},   0,          0, A, .unit = "mode" },
-    {     "lr>l+r",  0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=5},   0,          0, A, .unit = "mode" },
-    {     "lr>rl",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=6},   0,          0, A, .unit = "mode" },
-    {     "ms>ll",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=7},   0,          0, A, .unit = "mode" },
-    {     "ms>rr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=8},   0,          0, A, .unit = "mode" },
-    {     "ms>rl",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=9},   0,          0, A, .unit = "mode" },
-    {     "lr>l-r",  0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=10},  0,          0, A, .unit = "mode" },
+    { "mode",        "set stereo mode",  OFFSET(mode),        AV_OPT_TYPE_INT,    {.i64=0},   0,         10, A, "mode" },
+    {     "lr>lr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=0},   0,          0, A, "mode" },
+    {     "lr>ms",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=1},   0,          0, A, "mode" },
+    {     "ms>lr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=2},   0,          0, A, "mode" },
+    {     "lr>ll",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=3},   0,          0, A, "mode" },
+    {     "lr>rr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=4},   0,          0, A, "mode" },
+    {     "lr>l+r",  0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=5},   0,          0, A, "mode" },
+    {     "lr>rl",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=6},   0,          0, A, "mode" },
+    {     "ms>ll",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=7},   0,          0, A, "mode" },
+    {     "ms>rr",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=8},   0,          0, A, "mode" },
+    {     "ms>rl",   0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=9},   0,          0, A, "mode" },
+    {     "lr>l-r",  0,                  0,                   AV_OPT_TYPE_CONST,  {.i64=10},  0,          0, A, "mode" },
     { "slev",        "set side level",   OFFSET(slev),        AV_OPT_TYPE_DOUBLE, {.dbl=1},   0.015625,  64, A },
     { "sbal",        "set side balance", OFFSET(sbal),        AV_OPT_TYPE_DOUBLE, {.dbl=0},  -1,          1, A },
     { "mlev",        "set middle level", OFFSET(mlev),        AV_OPT_TYPE_DOUBLE, {.dbl=1},   0.015625,  64, A },
@@ -89,11 +89,11 @@ static const AVOption stereotools_options[] = {
     { "delay",       "set delay",        OFFSET(delay),       AV_OPT_TYPE_DOUBLE, {.dbl=0}, -20,         20, A },
     { "sclevel",     "set S/C level",    OFFSET(sc_level),    AV_OPT_TYPE_DOUBLE, {.dbl=1},   1,        100, A },
     { "phase",       "set stereo phase", OFFSET(phase),       AV_OPT_TYPE_DOUBLE, {.dbl=0},   0,        360, A },
-    { "bmode_in",    "set balance in mode", OFFSET(bmode_in), AV_OPT_TYPE_INT,    {.i64=0},   0,          2, A, .unit = "bmode" },
-    {     "balance",   0,                0,                   AV_OPT_TYPE_CONST,  {.i64=0},   0,          0, A, .unit = "bmode" },
-    {     "amplitude", 0,                0,                   AV_OPT_TYPE_CONST,  {.i64=1},   0,          0, A, .unit = "bmode" },
-    {     "power",     0,                0,                   AV_OPT_TYPE_CONST,  {.i64=2},   0,          0, A, .unit = "bmode" },
-    { "bmode_out", "set balance out mode", OFFSET(bmode_out), AV_OPT_TYPE_INT,    {.i64=0},   0,          2, A, .unit = "bmode" },
+    { "bmode_in",    "set balance in mode", OFFSET(bmode_in), AV_OPT_TYPE_INT,    {.i64=0},   0,          2, A, "bmode" },
+    {     "balance",   0,                0,                   AV_OPT_TYPE_CONST,  {.i64=0},   0,          0, A, "bmode" },
+    {     "amplitude", 0,                0,                   AV_OPT_TYPE_CONST,  {.i64=1},   0,          0, A, "bmode" },
+    {     "power",     0,                0,                   AV_OPT_TYPE_CONST,  {.i64=2},   0,          0, A, "bmode" },
+    { "bmode_out", "set balance out mode", OFFSET(bmode_out), AV_OPT_TYPE_INT,    {.i64=0},   0,          2, A, "bmode" },
     { NULL }
 };
 
@@ -107,11 +107,12 @@ static int query_formats(AVFilterContext *ctx)
 
     if ((ret = ff_add_format                 (&formats, AV_SAMPLE_FMT_DBL  )) < 0 ||
         (ret = ff_set_common_formats         (ctx     , formats            )) < 0 ||
-        (ret = ff_add_channel_layout         (&layout , &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO)) < 0 ||
+        (ret = ff_add_channel_layout         (&layout , AV_CH_LAYOUT_STEREO)) < 0 ||
         (ret = ff_set_common_channel_layouts (ctx     , layout             )) < 0)
         return ret;
 
-    return ff_set_common_all_samplerates(ctx);
+    formats = ff_all_samplerates();
+    return ff_set_common_samplerates(ctx, formats);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -119,7 +120,7 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     StereoToolsContext *s = ctx->priv;
 
-    s->length = FFALIGN((inlink->sample_rate + 9) / 10, 2);
+    s->length = FFALIGN(inlink->sample_rate / 10, 2);
     if (!s->buffer)
         s->buffer = av_calloc(s->length, sizeof(*s->buffer));
     if (!s->buffer)
@@ -363,17 +364,26 @@ static const AVFilterPad inputs[] = {
         .filter_frame = filter_frame,
         .config_props = config_input,
     },
+    { NULL }
 };
 
-const AVFilter ff_af_stereotools = {
+static const AVFilterPad outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_AUDIO,
+    },
+    { NULL }
+};
+
+AVFilter ff_af_stereotools = {
     .name           = "stereotools",
     .description    = NULL_IF_CONFIG_SMALL("Apply various stereo tools."),
+    .query_formats  = query_formats,
     .priv_size      = sizeof(StereoToolsContext),
     .priv_class     = &stereotools_class,
     .uninit         = uninit,
-    FILTER_INPUTS(inputs),
-    FILTER_OUTPUTS(ff_audio_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
+    .inputs         = inputs,
+    .outputs        = outputs,
     .process_command = process_command,
     .flags          = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL,
 };

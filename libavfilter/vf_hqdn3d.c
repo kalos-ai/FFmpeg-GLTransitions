@@ -31,12 +31,12 @@
 #include "config.h"
 #include "libavutil/attributes.h"
 #include "libavutil/common.h"
-#include "libavutil/emms.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/opt.h"
 
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
 #include "video.h"
 #include "vf_hqdn3d.h"
@@ -179,8 +179,8 @@ static void precalc_coefs(double dist25, int depth, int16_t *ct)
 
     gamma = log(0.25) / log(1.0 - FFMIN(dist25,252.0)/255.0 - 0.00001);
 
-    for (i = -(256<<LUT_BITS); i < 256<<LUT_BITS; i++) {
-        double f = (i * (1 << (9-LUT_BITS)) + (1<<(8-LUT_BITS)) - 1) / 512.0; // midpoint of the bin
+    for (i = -256<<LUT_BITS; i < 256<<LUT_BITS; i++) {
+        double f = ((i<<(9-LUT_BITS)) + (1<<(8-LUT_BITS)) - 1) / 512.0; // midpoint of the bin
         simil = FFMAX(0, 1.0 - fabs(f) / 255.0);
         C = pow(simil, gamma) * 256.0 * f;
         ct[(256<<LUT_BITS)+i] = lrint(C);
@@ -229,19 +229,26 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&s->frame_prev[2]);
 }
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV444P,
-    AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P, AV_PIX_FMT_YUV440P,
-    AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P,
-    AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
-    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
-    AV_PIX_FMT_YUV440P10,
-    AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
-    AV_PIX_FMT_YUV440P12,
-    AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
-    AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
-    AV_PIX_FMT_NONE
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV444P,
+        AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P, AV_PIX_FMT_YUV440P,
+        AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P,
+        AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
+        AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
+        AV_PIX_FMT_YUV440P10,
+        AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
+        AV_PIX_FMT_YUV440P12,
+        AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
+        AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
+        AV_PIX_FMT_NONE
+    };
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
+}
 
 static void calc_coefs(AVFilterContext *ctx)
 {
@@ -278,9 +285,8 @@ static int config_input(AVFilterLink *inlink)
 
     calc_coefs(ctx);
 
-#if ARCH_X86
-    ff_hqdn3d_init_x86(s);
-#endif
+    if (ARCH_X86)
+        ff_hqdn3d_init_x86(s);
 
     return 0;
 }
@@ -334,7 +340,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     td.out = out;
     td.direct = direct;
     /* one thread per plane */
-    ff_filter_execute(ctx, do_denoise, &td, NULL, 3);
+    ctx->internal->execute(ctx, do_denoise, &td, NULL, 3);
 
     if (ctx->is_disabled) {
         av_frame_free(&out);
@@ -380,19 +386,28 @@ static const AVFilterPad avfilter_vf_hqdn3d_inputs[] = {
         .config_props = config_input,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
 
-const AVFilter ff_vf_hqdn3d = {
+static const AVFilterPad avfilter_vf_hqdn3d_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_hqdn3d = {
     .name          = "hqdn3d",
     .description   = NULL_IF_CONFIG_SMALL("Apply a High Quality 3D Denoiser."),
     .priv_size     = sizeof(HQDN3DContext),
     .priv_class    = &hqdn3d_class,
     .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(avfilter_vf_hqdn3d_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .query_formats = query_formats,
+    .inputs        = avfilter_vf_hqdn3d_inputs,
+    .outputs       = avfilter_vf_hqdn3d_outputs,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL | AVFILTER_FLAG_SLICE_THREADS,
     .process_command = process_command,
 };

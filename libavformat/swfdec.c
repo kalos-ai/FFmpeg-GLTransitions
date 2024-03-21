@@ -32,7 +32,6 @@
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
 #include "libavcodec/get_bits.h"
-#include "demux.h"
 #include "swf.h"
 #include "flv.h"
 
@@ -53,7 +52,7 @@ static const AVCodecTag swf_audio_codec_tags[] = {
     { AV_CODEC_ID_ADPCM_SWF,  0x01 },
     { AV_CODEC_ID_MP3,        0x02 },
     { AV_CODEC_ID_PCM_S16LE,  0x03 },
-    { AV_CODEC_ID_NELLYMOSER, 0x06 },
+//  { AV_CODEC_ID_NELLYMOSER, 0x06 },
     { AV_CODEC_ID_NONE,          0 },
 };
 
@@ -196,10 +195,16 @@ static AVStream *create_new_audio_stream(AVFormatContext *s, int id, int info)
     if (!ast)
         return NULL;
     ast->id = id;
-    av_channel_layout_default(&ast->codecpar->ch_layout, 1 + (info & 1));
+    if (info & 1) {
+        ast->codecpar->channels       = 2;
+        ast->codecpar->channel_layout = AV_CH_LAYOUT_STEREO;
+    } else {
+        ast->codecpar->channels       = 1;
+        ast->codecpar->channel_layout = AV_CH_LAYOUT_MONO;
+    }
     ast->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
     ast->codecpar->codec_id   = ff_codec_get_id(swf_audio_codec_tags, info>>4 & 15);
-    ffstream(ast)->need_parsing = AVSTREAM_PARSE_FULL;
+    ast->need_parsing = AVSTREAM_PARSE_FULL;
     sample_rate_code = info>>2 & 3;
     sample_size_code = info>>1 & 1;
     if (!sample_size_code && ast->codecpar->codec_id == AV_CODEC_ID_PCM_S16LE)
@@ -288,7 +293,7 @@ static int swf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 return AVERROR(ENOMEM);
             ast->duration = avio_rl32(pb); // number of samples
             if (((v>>4) & 15) == 2) { // MP3 sound data record
-                ffstream(ast)->skip_samples = avio_rl16(pb);
+                ast->internal->skip_samples = avio_rl16(pb);
                 len -= 2;
             }
             len -= 7;
@@ -562,9 +567,9 @@ static av_cold int swf_read_close(AVFormatContext *avctx)
 }
 #endif
 
-const FFInputFormat ff_swf_demuxer = {
-    .p.name         = "swf",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("SWF (ShockWave Flash)"),
+AVInputFormat ff_swf_demuxer = {
+    .name           = "swf",
+    .long_name      = NULL_IF_CONFIG_SMALL("SWF (ShockWave Flash)"),
     .priv_data_size = sizeof(SWFDecContext),
     .read_probe     = swf_probe,
     .read_header    = swf_read_header,

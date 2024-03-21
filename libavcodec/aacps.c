@@ -26,6 +26,7 @@
 #include "libavutil/common.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/mem_internal.h"
+#include "avcodec.h"
 #include "aacps.h"
 #if USE_FIXED
 #include "aacps_fixed_tablegen.h"
@@ -50,8 +51,7 @@ static void ipdopd_reset(int8_t *ipd_hist, int8_t *opd_hist)
 
 /** Split one subband into 2 subsubbands with a symmetric real filter.
  * The filter must have its non-center even coefficients equal to zero. */
-static void hybrid2_re(INTFLOAT (*in)[2], INTFLOAT (*out)[32][2],
-                       const INTFLOAT filter[7], int len, int reverse)
+static void hybrid2_re(INTFLOAT (*in)[2], INTFLOAT (*out)[32][2], const INTFLOAT filter[8], int len, int reverse)
 {
     int i, j;
     for (i = 0; i < len; i++, in++) {
@@ -716,7 +716,7 @@ static void stereo_processing(PSContext *ps, INTFLOAT (*l)[32][2], INTFLOAT (*r)
     }
 }
 
-int AAC_RENAME(ff_ps_apply)(PSContext *ps, INTFLOAT L[2][38][64], INTFLOAT R[2][38][64], int top)
+int AAC_RENAME(ff_ps_apply)(AVCodecContext *avctx, PSContext *ps, INTFLOAT L[2][38][64], INTFLOAT R[2][38][64], int top)
 {
     INTFLOAT (*Lbuf)[32][2] = ps->Lbuf;
     INTFLOAT (*Rbuf)[32][2] = ps->Rbuf;
@@ -739,4 +739,10 @@ int AAC_RENAME(ff_ps_apply)(PSContext *ps, INTFLOAT L[2][38][64], INTFLOAT R[2][
 
 av_cold void AAC_RENAME(ff_ps_init)(void) {
     ps_tableinit();
+    ff_ps_init_common();
+}
+
+av_cold void AAC_RENAME(ff_ps_ctx_init)(PSContext *ps)
+{
+    AAC_RENAME(ff_psdsp_init)(&ps->dsp);
 }

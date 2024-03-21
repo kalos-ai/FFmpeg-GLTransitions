@@ -23,7 +23,6 @@
 #include "avcodec.h"
 #include "nvdec.h"
 #include "decode.h"
-#include "hwaccel_internal.h"
 #include "internal.h"
 #include "av1dec.h"
 
@@ -50,7 +49,7 @@ static int nvdec_av1_start_frame(AVCodecContext *avctx, const uint8_t *buffer, u
     CUVIDAV1PICPARAMS *ppc = &pp->CodecSpecific.av1;
     FrameDecodeData *fdd;
     NVDECFrame *cf;
-    AVFrame *cur_frame = s->cur_frame.f;
+    AVFrame *cur_frame = s->cur_frame.tf.f;
 
     unsigned char remap_lr_type[4] = { AV1_RESTORE_NONE, AV1_RESTORE_SWITCHABLE, AV1_RESTORE_WIENER, AV1_RESTORE_SGRPROJ };
 
@@ -234,7 +233,7 @@ static int nvdec_av1_start_frame(AVCodecContext *avctx, const uint8_t *buffer, u
         ppc->loop_filter_ref_deltas[i] = frame_header->loop_filter_ref_deltas[i];
 
         /* Reference Frames */
-        ppc->ref_frame_map[i] = ff_nvdec_get_ref_idx(s->ref[i].f);
+        ppc->ref_frame_map[i] = ff_nvdec_get_ref_idx(s->ref[i].tf.f);
     }
 
     if (frame_header->primary_ref_frame == AV1_PRIMARY_REF_NONE) {
@@ -247,7 +246,7 @@ static int nvdec_av1_start_frame(AVCodecContext *avctx, const uint8_t *buffer, u
     for (i = 0; i < AV1_REFS_PER_FRAME; ++i) {
         /* Ref Frame List */
         int8_t ref_idx = frame_header->ref_frame_idx[i];
-        AVFrame *ref_frame = s->ref[ref_idx].f;
+        AVFrame *ref_frame = s->ref[ref_idx].tf.f;
 
         ppc->ref_frame[i].index = ppc->ref_frame_map[ref_idx];
         ppc->ref_frame[i].width = ref_frame->width;
@@ -303,7 +302,7 @@ static int nvdec_av1_decode_slice(AVCodecContext *avctx, const uint8_t *buffer, 
 
     /* Shortcut if all tiles are in the same buffer */
     if (ctx->nb_slices == s->tg_end - s->tg_start + 1) {
-        ctx->bitstream = buffer;
+        ctx->bitstream = (uint8_t*)buffer;
         ctx->bitstream_len = size;
 
         for (int i = 0; i < ctx->nb_slices; ++i) {
@@ -321,7 +320,7 @@ static int nvdec_av1_decode_slice(AVCodecContext *avctx, const uint8_t *buffer, 
     }
     ctx->bitstream = ctx->bitstream_internal = tmp;
 
-    memcpy(ctx->bitstream_internal + ctx->bitstream_len, buffer, size);
+    memcpy(ctx->bitstream + ctx->bitstream_len, buffer, size);
 
     for (uint32_t tile_num = s->tg_start; tile_num <= s->tg_end; ++tile_num) {
         ctx->slice_offsets[tile_num*2    ] = ctx->bitstream_len + s->tile_group_info[tile_num].tile_offset;
@@ -338,11 +337,11 @@ static int nvdec_av1_frame_params(AVCodecContext *avctx, AVBufferRef *hw_frames_
     return ff_nvdec_frame_params(avctx, hw_frames_ctx, 8 * 2, 0);
 }
 
-const FFHWAccel ff_av1_nvdec_hwaccel = {
-    .p.name               = "av1_nvdec",
-    .p.type               = AVMEDIA_TYPE_VIDEO,
-    .p.id                 = AV_CODEC_ID_AV1,
-    .p.pix_fmt            = AV_PIX_FMT_CUDA,
+const AVHWAccel ff_av1_nvdec_hwaccel = {
+    .name                 = "av1_nvdec",
+    .type                 = AVMEDIA_TYPE_VIDEO,
+    .id                   = AV_CODEC_ID_AV1,
+    .pix_fmt              = AV_PIX_FMT_CUDA,
     .start_frame          = nvdec_av1_start_frame,
     .end_frame            = ff_nvdec_simple_end_frame,
     .decode_slice         = nvdec_av1_decode_slice,

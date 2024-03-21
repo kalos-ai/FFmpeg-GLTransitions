@@ -21,9 +21,10 @@
 #include <float.h>
 
 #include "libavutil/opt.h"
-#include "libavutil/pixdesc.h"
+#include "libavutil/imgutils.h"
 #include "avfilter.h"
 #include "drawutils.h"
+#include "formats.h"
 #include "internal.h"
 #include "video.h"
 
@@ -96,9 +97,9 @@ static int colorcontrast_slice8(AVFilterContext *ctx, void *arg, int jobnr, int 
     const int height = frame->height;
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t glinesize = frame->linesize[0];
-    const ptrdiff_t blinesize = frame->linesize[1];
-    const ptrdiff_t rlinesize = frame->linesize[2];
+    const int glinesize = frame->linesize[0];
+    const int blinesize = frame->linesize[1];
+    const int rlinesize = frame->linesize[2];
     uint8_t *gptr = frame->data[0] + slice_start * glinesize;
     uint8_t *bptr = frame->data[1] + slice_start * blinesize;
     uint8_t *rptr = frame->data[2] + slice_start * rlinesize;
@@ -150,9 +151,9 @@ static int colorcontrast_slice16(AVFilterContext *ctx, void *arg, int jobnr, int
     const int height = frame->height;
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t glinesize = frame->linesize[0] / 2;
-    const ptrdiff_t blinesize = frame->linesize[1] / 2;
-    const ptrdiff_t rlinesize = frame->linesize[2] / 2;
+    const int glinesize = frame->linesize[0] / 2;
+    const int blinesize = frame->linesize[1] / 2;
+    const int rlinesize = frame->linesize[2] / 2;
     uint16_t *gptr = (uint16_t *)frame->data[0] + slice_start * glinesize;
     uint16_t *bptr = (uint16_t *)frame->data[1] + slice_start * blinesize;
     uint16_t *rptr = (uint16_t *)frame->data[2] + slice_start * rlinesize;
@@ -203,7 +204,7 @@ static int colorcontrast_slice8p(AVFilterContext *ctx, void *arg, int jobnr, int
     const int height = frame->height;
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t linesize = frame->linesize[0];
+    const int linesize = frame->linesize[0];
     const uint8_t roffset = s->rgba_map[R];
     const uint8_t goffset = s->rgba_map[G];
     const uint8_t boffset = s->rgba_map[B];
@@ -255,7 +256,7 @@ static int colorcontrast_slice16p(AVFilterContext *ctx, void *arg, int jobnr, in
     const int height = frame->height;
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t linesize = frame->linesize[0] / 2;
+    const int linesize = frame->linesize[0] / 2;
     const uint8_t roffset = s->rgba_map[R];
     const uint8_t goffset = s->rgba_map[G];
     const uint8_t boffset = s->rgba_map[B];
@@ -302,27 +303,38 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     ColorContrastContext *s = ctx->priv;
     int res;
 
-    if (res = ff_filter_execute(ctx, s->do_slice, frame, NULL,
-                                FFMIN(frame->height, ff_filter_get_nb_threads(ctx))))
+    if (res = ctx->internal->execute(ctx, s->do_slice, frame, NULL,
+                                       FFMIN(frame->height, ff_filter_get_nb_threads(ctx))))
         return res;
 
     return ff_filter_frame(ctx->outputs[0], frame);
 }
 
-static const enum AVPixelFormat pixel_fmts[] = {
-    AV_PIX_FMT_RGB24, AV_PIX_FMT_BGR24,
-    AV_PIX_FMT_RGBA, AV_PIX_FMT_BGRA,
-    AV_PIX_FMT_ARGB, AV_PIX_FMT_ABGR,
-    AV_PIX_FMT_0RGB, AV_PIX_FMT_0BGR,
-    AV_PIX_FMT_RGB0, AV_PIX_FMT_BGR0,
-    AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
-    AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12,
-    AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
-    AV_PIX_FMT_GBRAP10, AV_PIX_FMT_GBRAP12, AV_PIX_FMT_GBRAP16,
-    AV_PIX_FMT_RGB48,  AV_PIX_FMT_BGR48,
-    AV_PIX_FMT_RGBA64, AV_PIX_FMT_BGRA64,
-    AV_PIX_FMT_NONE
-};
+static av_cold int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pixel_fmts[] = {
+        AV_PIX_FMT_RGB24, AV_PIX_FMT_BGR24,
+        AV_PIX_FMT_RGBA, AV_PIX_FMT_BGRA,
+        AV_PIX_FMT_ARGB, AV_PIX_FMT_ABGR,
+        AV_PIX_FMT_0RGB, AV_PIX_FMT_0BGR,
+        AV_PIX_FMT_RGB0, AV_PIX_FMT_BGR0,
+        AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
+        AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12,
+        AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
+        AV_PIX_FMT_GBRAP10, AV_PIX_FMT_GBRAP12, AV_PIX_FMT_GBRAP16,
+        AV_PIX_FMT_RGB48,  AV_PIX_FMT_BGR48,
+        AV_PIX_FMT_RGBA64, AV_PIX_FMT_BGRA64,
+        AV_PIX_FMT_NONE
+    };
+
+    AVFilterFormats *formats = NULL;
+
+    formats = ff_make_format_list(pixel_fmts);
+    if (!formats)
+        return AVERROR(ENOMEM);
+
+    return ff_set_common_formats(ctx, formats);
+}
 
 static av_cold int config_input(AVFilterLink *inlink)
 {
@@ -352,10 +364,19 @@ static const AVFilterPad colorcontrast_inputs[] = {
     {
         .name           = "default",
         .type           = AVMEDIA_TYPE_VIDEO,
-        .flags          = AVFILTERPAD_FLAG_NEEDS_WRITABLE,
+        .needs_writable = 1,
         .filter_frame   = filter_frame,
         .config_props   = config_input,
     },
+    { NULL }
+};
+
+static const AVFilterPad colorcontrast_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
 };
 
 #define OFFSET(x) offsetof(ColorContrastContext, x)
@@ -374,14 +395,14 @@ static const AVOption colorcontrast_options[] = {
 
 AVFILTER_DEFINE_CLASS(colorcontrast);
 
-const AVFilter ff_vf_colorcontrast = {
+AVFilter ff_vf_colorcontrast = {
     .name          = "colorcontrast",
     .description   = NULL_IF_CONFIG_SMALL("Adjust color contrast between RGB components."),
     .priv_size     = sizeof(ColorContrastContext),
     .priv_class    = &colorcontrast_class,
-    FILTER_INPUTS(colorcontrast_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pixel_fmts),
+    .query_formats = query_formats,
+    .inputs        = colorcontrast_inputs,
+    .outputs       = colorcontrast_outputs,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC | AVFILTER_FLAG_SLICE_THREADS,
     .process_command = ff_filter_process_command,
 };

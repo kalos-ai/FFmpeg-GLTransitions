@@ -31,7 +31,7 @@
  * ported by Clément Bœsch for FFmpeg.
  */
 
-#include "libavutil/emms.h"
+#include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
@@ -39,13 +39,19 @@
 #include "internal.h"
 #include "qp_table.h"
 #include "vf_spp.h"
-#include "video.h"
 
 enum mode {
     MODE_HARD,
     MODE_SOFT,
     NB_MODES
 };
+
+#if FF_API_CHILD_CLASS_NEXT
+static const AVClass *child_class_next(const AVClass *prev)
+{
+    return prev ? NULL : avcodec_dct_get_class();
+}
+#endif
 
 static const AVClass *child_class_iterate(void **iter)
 {
@@ -66,9 +72,9 @@ static void *child_next(void *obj, void *prev)
 static const AVOption spp_options[] = {
     { "quality", "set quality", OFFSET(log2_count), AV_OPT_TYPE_INT, {.i64 = 3}, 0, MAX_LEVEL, TFLAGS },
     { "qp", "force a constant quantizer parameter", OFFSET(qp), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 63, FLAGS },
-    { "mode", "set thresholding mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_HARD}, 0, NB_MODES - 1, FLAGS, .unit = "mode" },
-        { "hard", "hard thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_HARD}, INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
-        { "soft", "soft thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_SOFT}, INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+    { "mode", "set thresholding mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_HARD}, 0, NB_MODES - 1, FLAGS, "mode" },
+        { "hard", "hard thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_HARD}, INT_MIN, INT_MAX, FLAGS, "mode" },
+        { "soft", "soft thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_SOFT}, INT_MIN, INT_MAX, FLAGS, "mode" },
     { "use_bframe_qp", "use B-frames' QP", OFFSET(use_bframe_qp), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS },
     { NULL }
 };
@@ -79,6 +85,9 @@ static const AVClass spp_class = {
     .option           = spp_options,
     .version          = LIBAVUTIL_VERSION_INT,
     .category         = AV_CLASS_CATEGORY_FILTER,
+#if FF_API_CHILD_CLASS_NEXT
+    .child_class_next = child_class_next,
+#endif
     .child_class_iterate = child_class_iterate,
     .child_next       = child_next,
 };
@@ -95,8 +104,7 @@ DECLARE_ALIGNED(8, static const uint8_t, ldither)[8][8] = {
     { 42,  26,  38,  22,  41,  25,  37,  21 },
 };
 
-static const uint8_t offset[128][2] = {
-    {0,0},                                                  // unused
+static const uint8_t offset[127][2] = {
     {0,0},
     {0,0}, {4,4},                                           // quality = 1
     {0,0}, {2,2}, {6,4}, {4,6},                             // quality = 2
@@ -286,8 +294,8 @@ static void filter(SPPContext *p, uint8_t *dst, uint8_t *src,
                 qp = FFMAX(1, ff_norm_qscale(qp, p->qscale_type));
             }
             for (i = 0; i < count; i++) {
-                const int x1 = x + offset[i + count][0];
-                const int y1 = y + offset[i + count][1];
+                const int x1 = x + offset[i + count - 1][0];
+                const int y1 = y + offset[i + count - 1][1];
                 const int index = x1 + y1*linesize;
                 p->dct->get_pixels_unaligned(block, p->src + sample_bytes*index, sample_bytes*linesize);
                 p->dct->fdct(block);
@@ -312,22 +320,30 @@ static void filter(SPPContext *p, uint8_t *dst, uint8_t *src,
     }
 }
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV444P,  AV_PIX_FMT_YUV422P,
-    AV_PIX_FMT_YUV420P,  AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_YUV410P,  AV_PIX_FMT_YUV440P,
-    AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ422P,
-    AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ440P,
-    AV_PIX_FMT_YUV444P10,  AV_PIX_FMT_YUV422P10,
-    AV_PIX_FMT_YUV420P10,
-    AV_PIX_FMT_YUV444P9,  AV_PIX_FMT_YUV422P9,
-    AV_PIX_FMT_YUV420P9,
-    AV_PIX_FMT_GRAY8,
-    AV_PIX_FMT_GBRP,
-    AV_PIX_FMT_GBRP9,
-    AV_PIX_FMT_GBRP10,
-    AV_PIX_FMT_NONE
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV444P,  AV_PIX_FMT_YUV422P,
+        AV_PIX_FMT_YUV420P,  AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_YUV410P,  AV_PIX_FMT_YUV440P,
+        AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ422P,
+        AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ440P,
+        AV_PIX_FMT_YUV444P10,  AV_PIX_FMT_YUV422P10,
+        AV_PIX_FMT_YUV420P10,
+        AV_PIX_FMT_YUV444P9,  AV_PIX_FMT_YUV422P9,
+        AV_PIX_FMT_YUV420P9,
+        AV_PIX_FMT_GRAY8,
+        AV_PIX_FMT_GBRP,
+        AV_PIX_FMT_GBRP9,
+        AV_PIX_FMT_GBRP10,
+        AV_PIX_FMT_NONE
+    };
+
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
+}
 
 static int config_input(AVFilterLink *inlink)
 {
@@ -336,18 +352,11 @@ static int config_input(AVFilterLink *inlink)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
     const int bps = desc->comp[0].depth;
 
-    s->store_slice = store_slice_c;
-    switch (s->mode) {
-    case MODE_HARD: s->requantize = hardthresh_c; break;
-    case MODE_SOFT: s->requantize = softthresh_c; break;
-    }
-
     av_opt_set_int(s->dct, "bits_per_sample", bps, 0);
     avcodec_dct_init(s->dct);
 
-#if ARCH_X86
-    ff_spp_init_x86(s);
-#endif
+    if (ARCH_X86)
+        ff_spp_init_x86(s);
 
     s->hsub = desc->log2_chroma_w;
     s->vsub = desc->log2_chroma_h;
@@ -456,14 +465,30 @@ static int process_command(AVFilterContext *ctx, const char *cmd, const char *ar
     return AVERROR(ENOSYS);
 }
 
-static av_cold int preinit(AVFilterContext *ctx)
+static av_cold int init_dict(AVFilterContext *ctx, AVDictionary **opts)
 {
     SPPContext *s = ctx->priv;
+    int ret;
 
     s->dct = avcodec_dct_alloc();
     if (!s->dct)
         return AVERROR(ENOMEM);
 
+    if (opts) {
+        AVDictionaryEntry *e = NULL;
+
+        while ((e = av_dict_get(*opts, "", e, AV_DICT_IGNORE_SUFFIX))) {
+            if ((ret = av_opt_set(s->dct, e->key, e->value, 0)) < 0)
+                return ret;
+        }
+        av_dict_free(opts);
+    }
+
+    s->store_slice = store_slice_c;
+    switch (s->mode) {
+    case MODE_HARD: s->requantize = hardthresh_c; break;
+    case MODE_SOFT: s->requantize = softthresh_c; break;
+    }
     return 0;
 }
 
@@ -484,17 +509,26 @@ static const AVFilterPad spp_inputs[] = {
         .config_props = config_input,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_spp = {
+static const AVFilterPad spp_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_spp = {
     .name            = "spp",
     .description     = NULL_IF_CONFIG_SMALL("Apply a simple post processing filter."),
     .priv_size       = sizeof(SPPContext),
-    .preinit         = preinit,
+    .init_dict       = init_dict,
     .uninit          = uninit,
-    FILTER_INPUTS(spp_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .query_formats   = query_formats,
+    .inputs          = spp_inputs,
+    .outputs         = spp_outputs,
     .process_command = process_command,
     .priv_class      = &spp_class,
     .flags           = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL,

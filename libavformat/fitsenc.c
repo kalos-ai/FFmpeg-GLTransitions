@@ -24,9 +24,7 @@
  * FITS muxer.
  */
 
-#include "avio_internal.h"
 #include "internal.h"
-#include "mux.h"
 
 typedef struct FITSContext {
     int first_image;
@@ -84,48 +82,48 @@ static int write_image_header(AVFormatContext *s)
     float datamax, datamin;
 
     switch (encctx->format) {
-    case AV_PIX_FMT_GRAY8:
-        bitpix = 8;
-        naxis = 2;
-        datamin = 0;
-        datamax = 255;
-        break;
-    case AV_PIX_FMT_GRAY16BE:
-        bitpix = 16;
-        naxis = 2;
-        bzero = 32768;
-        datamin = 0;
-        datamax = 65535;
-        break;
-    case AV_PIX_FMT_GBRP:
-    case AV_PIX_FMT_GBRAP:
-        bitpix = 8;
-        naxis = 3;
-        rgb = 1;
-        if (encctx->format == AV_PIX_FMT_GBRP) {
-            naxis3 = 3;
-        } else {
-            naxis3 = 4;
-        }
-        datamin = 0;
-        datamax = 255;
-        break;
-    case AV_PIX_FMT_GBRP16BE:
-    case AV_PIX_FMT_GBRAP16BE:
-        bitpix = 16;
-        naxis = 3;
-        rgb = 1;
-        if (encctx->format == AV_PIX_FMT_GBRP16BE) {
-            naxis3 = 3;
-        } else {
-            naxis3 = 4;
-        }
-        bzero = 32768;
-        datamin = 0;
-        datamax = 65535;
-        break;
-    default:
-        return AVERROR(EINVAL);
+        case AV_PIX_FMT_GRAY8:
+            bitpix = 8;
+            naxis = 2;
+            datamin = 0;
+            datamax = 255;
+            break;
+        case AV_PIX_FMT_GRAY16BE:
+            bitpix = 16;
+            naxis = 2;
+            bzero = 32768;
+            datamin = 0;
+            datamax = 65535;
+            break;
+        case AV_PIX_FMT_GBRP:
+        case AV_PIX_FMT_GBRAP:
+            bitpix = 8;
+            naxis = 3;
+            rgb = 1;
+            if (encctx->format == AV_PIX_FMT_GBRP) {
+                naxis3 = 3;
+            } else {
+                naxis3 = 4;
+            }
+            datamin = 0;
+            datamax = 255;
+            break;
+        case AV_PIX_FMT_GBRP16BE:
+        case AV_PIX_FMT_GBRAP16BE:
+            bitpix = 16;
+            naxis = 3;
+            rgb = 1;
+            if (encctx->format == AV_PIX_FMT_GBRP16BE) {
+                naxis3 = 3;
+            } else {
+                naxis3 = 4;
+            }
+            bzero = 32768;
+            datamin = 0;
+            datamax = 65535;
+            break;
+        default:
+            return AVERROR(EINVAL);
     }
 
     if (fitsctx->first_image) {
@@ -179,7 +177,11 @@ static int write_image_header(AVFormatContext *s)
     lines_written++;
 
     lines_left = ((lines_written + 35) / 36) * 36 - lines_written;
-    ffio_fill(s->pb, ' ', sizeof(buffer) * lines_left);
+    memset(buffer, ' ', 80);
+    while (lines_left > 0) {
+        avio_write(s->pb, buffer, sizeof(buffer));
+        lines_left--;
+    }
     return 0;
 }
 
@@ -192,14 +194,13 @@ static int fits_write_packet(AVFormatContext *s, AVPacket *pkt)
     return 0;
 }
 
-const FFOutputFormat ff_fits_muxer = {
-    .p.name         = "fits",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Flexible Image Transport System"),
-    .p.extensions   = "fits",
-    .p.audio_codec  = AV_CODEC_ID_NONE,
-    .p.video_codec  = AV_CODEC_ID_FITS,
+AVOutputFormat ff_fits_muxer = {
+    .name         = "fits",
+    .long_name    = NULL_IF_CONFIG_SMALL("Flexible Image Transport System"),
+    .extensions   = "fits",
     .priv_data_size = sizeof(FITSContext),
-    .write_header   = fits_write_header,
-    .write_packet   = fits_write_packet,
-    .p.flags        = AVFMT_NOTIMESTAMPS,
+    .audio_codec  = AV_CODEC_ID_NONE,
+    .video_codec  = AV_CODEC_ID_FITS,
+    .write_header = fits_write_header,
+    .write_packet = fits_write_packet,
 };

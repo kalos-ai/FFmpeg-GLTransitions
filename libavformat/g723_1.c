@@ -27,7 +27,6 @@
 #include "libavutil/attributes.h"
 #include "libavutil/channel_layout.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 static const uint8_t frame_size[4] = { 24, 20, 4, 1 };
@@ -42,7 +41,8 @@ static av_cold int g723_1_init(AVFormatContext *s)
 
     st->codecpar->codec_type     = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id       = AV_CODEC_ID_G723_1;
-    st->codecpar->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    st->codecpar->channel_layout = AV_CH_LAYOUT_MONO;
+    st->codecpar->channels       = 1;
     st->codecpar->sample_rate    = 8000;
 
     avpriv_set_pts_info(st, 64, 1, st->codecpar->sample_rate);
@@ -75,11 +75,11 @@ static int g723_1_read_packet(AVFormatContext *s, AVPacket *pkt)
     return pkt->size;
 }
 
-const FFInputFormat ff_g723_1_demuxer = {
-    .p.name         = "g723_1",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("G.723.1"),
-    .p.extensions   = "tco,rco,g723_1",
-    .p.flags        = AVFMT_GENERIC_INDEX,
+AVInputFormat ff_g723_1_demuxer = {
+    .name        = "g723_1",
+    .long_name   = NULL_IF_CONFIG_SMALL("G.723.1"),
     .read_header = g723_1_init,
     .read_packet = g723_1_read_packet,
+    .extensions  = "tco,rco,g723_1",
+    .flags       = AVFMT_GENERIC_INDEX
 };

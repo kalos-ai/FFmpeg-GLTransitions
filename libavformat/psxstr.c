@@ -33,7 +33,6 @@
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 #define RIFF_TAG MKTAG('R', 'I', 'F', 'F')
@@ -49,7 +48,6 @@
 #define CDXA_TYPE_DATA     0x08
 #define CDXA_TYPE_AUDIO    0x04
 #define CDXA_TYPE_VIDEO    0x02
-#define CDXA_TYPE_EMPTY    0x00
 
 #define STR_MAGIC (0x80010160)
 
@@ -167,12 +165,8 @@ static int str_read_packet(AVFormatContext *s,
     AVStream *st;
 
     while (1) {
-        int read = avio_read(pb, sector, RAW_CD_SECTOR_SIZE);
 
-        if (read == AVERROR_EOF)
-            return AVERROR_EOF;
-
-        if (read != RAW_CD_SECTOR_SIZE)
+        if (avio_read(pb, sector, RAW_CD_SECTOR_SIZE) != RAW_CD_SECTOR_SIZE)
             return AVERROR(EIO);
 
         channel = sector[0x11];
@@ -258,12 +252,18 @@ static int str_read_packet(AVFormatContext *s,
                 st->codecpar->codec_type  = AVMEDIA_TYPE_AUDIO;
                 st->codecpar->codec_id    = AV_CODEC_ID_ADPCM_XA;
                 st->codecpar->codec_tag   = 0;  /* no fourcc */
-                av_channel_layout_default(&st->codecpar->ch_layout, (fmt & 1) + 1);
+                if (fmt & 1) {
+                    st->codecpar->channels       = 2;
+                    st->codecpar->channel_layout = AV_CH_LAYOUT_STEREO;
+                } else {
+                    st->codecpar->channels       = 1;
+                    st->codecpar->channel_layout = AV_CH_LAYOUT_MONO;
+                }
                 st->codecpar->sample_rate = (fmt&4)?18900:37800;
             //    st->codecpar->bit_rate = 0; //FIXME;
                 st->codecpar->block_align = 128;
 
-                avpriv_set_pts_info(st, 64, 18 * 224 / st->codecpar->ch_layout.nb_channels,
+                avpriv_set_pts_info(st, 64, 18 * 224 / st->codecpar->channels,
                                     st->codecpar->sample_rate);
                 st->start_time = 0;
             }
@@ -276,10 +276,6 @@ static int str_read_packet(AVFormatContext *s,
                 str->channels[channel].audio_stream_index;
             pkt->duration = 1;
             return 0;
-        case CDXA_TYPE_EMPTY: /* CD-ROM XA, May 1991, 4.3.2.3 */
-            /* NOTE this also catches 0x80 (EOF bit) because of CDXA_TYPE_MASK */
-            /* TODO consider refactoring so as to explicitly handle each case? */
-            break;
         default:
             av_log(s, AV_LOG_WARNING, "Unknown sector type %02X\n", sector[0x12]);
             /* drop the sector and move on */
@@ -303,13 +299,13 @@ static int str_read_close(AVFormatContext *s)
     return 0;
 }
 
-const FFInputFormat ff_str_demuxer = {
-    .p.name         = "psxstr",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Sony Playstation STR"),
-    .p.flags        = AVFMT_NO_BYTE_SEEK,
+AVInputFormat ff_str_demuxer = {
+    .name           = "psxstr",
+    .long_name      = NULL_IF_CONFIG_SMALL("Sony Playstation STR"),
     .priv_data_size = sizeof(StrDemuxContext),
     .read_probe     = str_probe,
     .read_header    = str_read_header,
     .read_packet    = str_read_packet,
     .read_close     = str_read_close,
+    .flags          = AVFMT_NO_BYTE_SEEK,
 };

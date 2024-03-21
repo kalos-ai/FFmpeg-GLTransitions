@@ -18,8 +18,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "libavutil/common.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/mem.h"
@@ -62,7 +60,7 @@ static int convolution_opencl_init(AVFilterContext *avctx)
     cl_int cle;
     int err;
 
-    err = ff_opencl_filter_load_program(avctx, &ff_source_convolution_cl, 1);
+    err = ff_opencl_filter_load_program(avctx, &ff_opencl_source_convolution, 1);
     if (err < 0)
         goto fail;
 
@@ -329,6 +327,7 @@ static const AVFilterPad convolution_opencl_inputs[] = {
         .filter_frame = &convolution_opencl_filter_frame,
         .config_props = &ff_opencl_filter_config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad convolution_opencl_outputs[] = {
@@ -337,6 +336,7 @@ static const AVFilterPad convolution_opencl_outputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = &ff_opencl_filter_config_output,
     },
+    { NULL }
 };
 
 #define OFFSET(x) offsetof(ConvolutionOpenCLContext, x)
@@ -362,18 +362,17 @@ static const AVOption convolution_opencl_options[] = {
 
 AVFILTER_DEFINE_CLASS(convolution_opencl);
 
-const AVFilter ff_vf_convolution_opencl = {
+AVFilter ff_vf_convolution_opencl = {
     .name           = "convolution_opencl",
     .description    = NULL_IF_CONFIG_SMALL("Apply convolution mask to input video"),
     .priv_size      = sizeof(ConvolutionOpenCLContext),
     .priv_class     = &convolution_opencl_class,
     .init           = &ff_opencl_filter_init,
     .uninit         = &convolution_opencl_uninit,
-    FILTER_INPUTS(convolution_opencl_inputs),
-    FILTER_OUTPUTS(convolution_opencl_outputs),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_OPENCL),
+    .query_formats  = &ff_opencl_filter_query_formats,
+    .inputs         = convolution_opencl_inputs,
+    .outputs        = convolution_opencl_outputs,
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
-    .flags          = AVFILTER_FLAG_HWDEVICE,
 };
 
 #endif /* CONFIG_CONVOLUTION_OPENCL_FILTER */
@@ -389,18 +388,17 @@ static const AVOption sobel_opencl_options[] = {
 
 AVFILTER_DEFINE_CLASS(sobel_opencl);
 
-const AVFilter ff_vf_sobel_opencl = {
+AVFilter ff_vf_sobel_opencl = {
     .name           = "sobel_opencl",
     .description    = NULL_IF_CONFIG_SMALL("Apply sobel operator"),
     .priv_size      = sizeof(ConvolutionOpenCLContext),
     .priv_class     = &sobel_opencl_class,
     .init           = &ff_opencl_filter_init,
     .uninit         = &convolution_opencl_uninit,
-    FILTER_INPUTS(convolution_opencl_inputs),
-    FILTER_OUTPUTS(convolution_opencl_outputs),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_OPENCL),
+    .query_formats  = &ff_opencl_filter_query_formats,
+    .inputs         = convolution_opencl_inputs,
+    .outputs        = convolution_opencl_outputs,
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
-    .flags          = AVFILTER_FLAG_HWDEVICE,
 };
 
 #endif /* CONFIG_SOBEL_OPENCL_FILTER */
@@ -416,18 +414,17 @@ static const AVOption prewitt_opencl_options[] = {
 
 AVFILTER_DEFINE_CLASS(prewitt_opencl);
 
-const AVFilter ff_vf_prewitt_opencl = {
+AVFilter ff_vf_prewitt_opencl = {
     .name           = "prewitt_opencl",
     .description    = NULL_IF_CONFIG_SMALL("Apply prewitt operator"),
     .priv_size      = sizeof(ConvolutionOpenCLContext),
     .priv_class     = &prewitt_opencl_class,
     .init           = &ff_opencl_filter_init,
     .uninit         = &convolution_opencl_uninit,
-    FILTER_INPUTS(convolution_opencl_inputs),
-    FILTER_OUTPUTS(convolution_opencl_outputs),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_OPENCL),
+    .query_formats  = &ff_opencl_filter_query_formats,
+    .inputs         = convolution_opencl_inputs,
+    .outputs        = convolution_opencl_outputs,
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
-    .flags          = AVFILTER_FLAG_HWDEVICE,
 };
 
 #endif /* CONFIG_PREWITT_OPENCL_FILTER */
@@ -443,18 +440,17 @@ static const AVOption roberts_opencl_options[] = {
 
 AVFILTER_DEFINE_CLASS(roberts_opencl);
 
-const AVFilter ff_vf_roberts_opencl = {
+AVFilter ff_vf_roberts_opencl = {
     .name           = "roberts_opencl",
     .description    = NULL_IF_CONFIG_SMALL("Apply roberts operator"),
     .priv_size      = sizeof(ConvolutionOpenCLContext),
     .priv_class     = &roberts_opencl_class,
     .init           = &ff_opencl_filter_init,
     .uninit         = &convolution_opencl_uninit,
-    FILTER_INPUTS(convolution_opencl_inputs),
-    FILTER_OUTPUTS(convolution_opencl_outputs),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_OPENCL),
+    .query_formats  = &ff_opencl_filter_query_formats,
+    .inputs         = convolution_opencl_inputs,
+    .outputs        = convolution_opencl_outputs,
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
-    .flags          = AVFILTER_FLAG_HWDEVICE,
 };
 
 #endif /* CONFIG_ROBERTS_OPENCL_FILTER */

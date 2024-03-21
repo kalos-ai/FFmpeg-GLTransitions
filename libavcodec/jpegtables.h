@@ -23,19 +23,17 @@
 
 #include <stdint.h>
 
-#include "libavutil/attributes_internal.h"
+#include "internal.h"
 
-FF_VISIBILITY_PUSH_HIDDEN
-extern const uint8_t ff_mjpeg_bits_dc_luminance[];
-extern const uint8_t ff_mjpeg_val_dc[];
+extern av_export_avcodec const uint8_t avpriv_mjpeg_bits_dc_luminance[];
+extern av_export_avcodec const uint8_t avpriv_mjpeg_val_dc[];
 
-extern const uint8_t ff_mjpeg_bits_dc_chrominance[];
+extern av_export_avcodec const uint8_t avpriv_mjpeg_bits_dc_chrominance[];
 
-extern const uint8_t ff_mjpeg_bits_ac_luminance[];
-extern const uint8_t ff_mjpeg_val_ac_luminance[];
+extern av_export_avcodec const uint8_t avpriv_mjpeg_bits_ac_luminance[];
+extern av_export_avcodec const uint8_t avpriv_mjpeg_val_ac_luminance[];
 
-extern const uint8_t ff_mjpeg_bits_ac_chrominance[];
-extern const uint8_t ff_mjpeg_val_ac_chrominance[];
-FF_VISIBILITY_POP_HIDDEN
+extern av_export_avcodec const uint8_t avpriv_mjpeg_bits_ac_chrominance[];
+extern av_export_avcodec const uint8_t avpriv_mjpeg_val_ac_chrominance[];
 
 #endif /* AVCODEC_JPEGTABLES_H */

@@ -19,10 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <assert.h>
 #include "avcodec.h"
 #include "ass.h"
-#include "codec_internal.h"
 #include "libavutil/opt.h"
 
 #define SCREEN_ROWS 15
@@ -68,123 +66,108 @@ enum cc_charset {
     CCSET_EXTENDED_PORTUGUESE_GERMAN_DANISH,
 };
 
-#define CHARSET_OVERRIDE_LIST(START_SET, ENTRY, END_SET) \
-    START_SET(CCSET_BASIC_AMERICAN)                      \
-        ENTRY(0x27, "\u2019")                            \
-        ENTRY(0x2a, "\u00e1")                            \
-        ENTRY(0x5c, "\u00e9")                            \
-        ENTRY(0x5e, "\u00ed")                            \
-        ENTRY(0x5f, "\u00f3")                            \
-        ENTRY(0x60, "\u00fa")                            \
-        ENTRY(0x7b, "\u00e7")                            \
-        ENTRY(0x7c, "\u00f7")                            \
-        ENTRY(0x7d, "\u00d1")                            \
-        ENTRY(0x7e, "\u00f1")                            \
-        ENTRY(0x7f, "\u2588")                            \
-    END_SET                                              \
-    START_SET(CCSET_SPECIAL_AMERICAN)                    \
-        ENTRY(0x30, "\u00ae")                            \
-        ENTRY(0x31, "\u00b0")                            \
-        ENTRY(0x32, "\u00bd")                            \
-        ENTRY(0x33, "\u00bf")                            \
-        ENTRY(0x34, "\u2122")                            \
-        ENTRY(0x35, "\u00a2")                            \
-        ENTRY(0x36, "\u00a3")                            \
-        ENTRY(0x37, "\u266a")                            \
-        ENTRY(0x38, "\u00e0")                            \
-        ENTRY(0x39, "\u00A0")                            \
-        ENTRY(0x3a, "\u00e8")                            \
-        ENTRY(0x3b, "\u00e2")                            \
-        ENTRY(0x3c, "\u00ea")                            \
-        ENTRY(0x3d, "\u00ee")                            \
-        ENTRY(0x3e, "\u00f4")                            \
-        ENTRY(0x3f, "\u00fb")                            \
-    END_SET                                              \
-    START_SET(CCSET_EXTENDED_SPANISH_FRENCH_MISC)        \
-        ENTRY(0x20, "\u00c1")                            \
-        ENTRY(0x21, "\u00c9")                            \
-        ENTRY(0x22, "\u00d3")                            \
-        ENTRY(0x23, "\u00da")                            \
-        ENTRY(0x24, "\u00dc")                            \
-        ENTRY(0x25, "\u00fc")                            \
-        ENTRY(0x26, "\u00b4")                            \
-        ENTRY(0x27, "\u00a1")                            \
-        ENTRY(0x28, "*")                                 \
-        ENTRY(0x29, "\u2018")                            \
-        ENTRY(0x2a, "-")                                 \
-        ENTRY(0x2b, "\u00a9")                            \
-        ENTRY(0x2c, "\u2120")                            \
-        ENTRY(0x2d, "\u00b7")                            \
-        ENTRY(0x2e, "\u201c")                            \
-        ENTRY(0x2f, "\u201d")                            \
-        ENTRY(0x30, "\u00c0")                            \
-        ENTRY(0x31, "\u00c2")                            \
-        ENTRY(0x32, "\u00c7")                            \
-        ENTRY(0x33, "\u00c8")                            \
-        ENTRY(0x34, "\u00ca")                            \
-        ENTRY(0x35, "\u00cb")                            \
-        ENTRY(0x36, "\u00eb")                            \
-        ENTRY(0x37, "\u00ce")                            \
-        ENTRY(0x38, "\u00cf")                            \
-        ENTRY(0x39, "\u00ef")                            \
-        ENTRY(0x3a, "\u00d4")                            \
-        ENTRY(0x3b, "\u00d9")                            \
-        ENTRY(0x3c, "\u00f9")                            \
-        ENTRY(0x3d, "\u00db")                            \
-        ENTRY(0x3e, "\u00ab")                            \
-        ENTRY(0x3f, "\u00bb")                            \
-    END_SET                                              \
-    START_SET(CCSET_EXTENDED_PORTUGUESE_GERMAN_DANISH)   \
-        ENTRY(0x20, "\u00c3")                            \
-        ENTRY(0x21, "\u00e3")                            \
-        ENTRY(0x22, "\u00cd")                            \
-        ENTRY(0x23, "\u00cc")                            \
-        ENTRY(0x24, "\u00ec")                            \
-        ENTRY(0x25, "\u00d2")                            \
-        ENTRY(0x26, "\u00f2")                            \
-        ENTRY(0x27, "\u00d5")                            \
-        ENTRY(0x28, "\u00f5")                            \
-        ENTRY(0x29, "{")                                 \
-        ENTRY(0x2a, "}")                                 \
-        ENTRY(0x2b, "\\")                                \
-        ENTRY(0x2c, "^")                                 \
-        ENTRY(0x2d, "_")                                 \
-        ENTRY(0x2e, "|")                                 \
-        ENTRY(0x2f, "~")                                 \
-        ENTRY(0x30, "\u00c4")                            \
-        ENTRY(0x31, "\u00e4")                            \
-        ENTRY(0x32, "\u00d6")                            \
-        ENTRY(0x33, "\u00f6")                            \
-        ENTRY(0x34, "\u00df")                            \
-        ENTRY(0x35, "\u00a5")                            \
-        ENTRY(0x36, "\u00a4")                            \
-        ENTRY(0x37, "\u00a6")                            \
-        ENTRY(0x38, "\u00c5")                            \
-        ENTRY(0x39, "\u00e5")                            \
-        ENTRY(0x3a, "\u00d8")                            \
-        ENTRY(0x3b, "\u00f8")                            \
-        ENTRY(0x3c, "\u250c")                            \
-        ENTRY(0x3d, "\u2510")                            \
-        ENTRY(0x3e, "\u2514")                            \
-        ENTRY(0x3f, "\u2518")                            \
-    END_SET                                              \
-
-static const char charset_overrides[4][128][sizeof("\u266a")] =
+static const char *charset_overrides[4][128] =
 {
-#define START_SET(IDX) \
-    [IDX] = {
-#define ENTRY(idx, string) \
-        [idx] = string,
-#define END_SET \
+    [CCSET_BASIC_AMERICAN] = {
+        [0x27] = "\u2019",
+        [0x2a] = "\u00e1",
+        [0x5c] = "\u00e9",
+        [0x5e] = "\u00ed",
+        [0x5f] = "\u00f3",
+        [0x60] = "\u00fa",
+        [0x7b] = "\u00e7",
+        [0x7c] = "\u00f7",
+        [0x7d] = "\u00d1",
+        [0x7e] = "\u00f1",
+        [0x7f] = "\u2588"
     },
-    CHARSET_OVERRIDE_LIST(START_SET, ENTRY, END_SET)
+    [CCSET_SPECIAL_AMERICAN] = {
+        [0x30] = "\u00ae",
+        [0x31] = "\u00b0",
+        [0x32] = "\u00bd",
+        [0x33] = "\u00bf",
+        [0x34] = "\u2122",
+        [0x35] = "\u00a2",
+        [0x36] = "\u00a3",
+        [0x37] = "\u266a",
+        [0x38] = "\u00e0",
+        [0x39] = "\u00A0",
+        [0x3a] = "\u00e8",
+        [0x3b] = "\u00e2",
+        [0x3c] = "\u00ea",
+        [0x3d] = "\u00ee",
+        [0x3e] = "\u00f4",
+        [0x3f] = "\u00fb",
+    },
+    [CCSET_EXTENDED_SPANISH_FRENCH_MISC] = {
+        [0x20] = "\u00c1",
+        [0x21] = "\u00c9",
+        [0x22] = "\u00d3",
+        [0x23] = "\u00da",
+        [0x24] = "\u00dc",
+        [0x25] = "\u00fc",
+        [0x26] = "\u00b4",
+        [0x27] = "\u00a1",
+        [0x28] = "*",
+        [0x29] = "\u2018",
+        [0x2a] = "-",
+        [0x2b] = "\u00a9",
+        [0x2c] = "\u2120",
+        [0x2d] = "\u00b7",
+        [0x2e] = "\u201c",
+        [0x2f] = "\u201d",
+        [0x30] = "\u00c0",
+        [0x31] = "\u00c2",
+        [0x32] = "\u00c7",
+        [0x33] = "\u00c8",
+        [0x34] = "\u00ca",
+        [0x35] = "\u00cb",
+        [0x36] = "\u00eb",
+        [0x37] = "\u00ce",
+        [0x38] = "\u00cf",
+        [0x39] = "\u00ef",
+        [0x3a] = "\u00d4",
+        [0x3b] = "\u00d9",
+        [0x3c] = "\u00f9",
+        [0x3d] = "\u00db",
+        [0x3e] = "\u00ab",
+        [0x3f] = "\u00bb",
+    },
+    [CCSET_EXTENDED_PORTUGUESE_GERMAN_DANISH] = {
+        [0x20] = "\u00c3",
+        [0x21] = "\u00e3",
+        [0x22] = "\u00cd",
+        [0x23] = "\u00cc",
+        [0x24] = "\u00ec",
+        [0x25] = "\u00d2",
+        [0x26] = "\u00f2",
+        [0x27] = "\u00d5",
+        [0x28] = "\u00f5",
+        [0x29] = "{",
+        [0x2a] = "}",
+        [0x2b] = "\\",
+        [0x2c] = "^",
+        [0x2d] = "_",
+        [0x2e] = "|",
+        [0x2f] = "~",
+        [0x30] = "\u00c4",
+        [0x31] = "\u00e4",
+        [0x32] = "\u00d6",
+        [0x33] = "\u00f6",
+        [0x34] = "\u00df",
+        [0x35] = "\u00a5",
+        [0x36] = "\u00a4",
+        [0x37] = "\u00a6",
+        [0x38] = "\u00c5",
+        [0x39] = "\u00e5",
+        [0x3a] = "\u00d8",
+        [0x3b] = "\u00f8",
+        [0x3c] = "\u250c",
+        [0x3d] = "\u2510",
+        [0x3e] = "\u2514",
+        [0x3f] = "\u2518",
+    },
 };
-#define EMPTY_START(IDX)
-#define EMPTY_END
-#define ASSERT_ENTRY(IDX, str)                                    \
-    static_assert(sizeof(str) <= sizeof(charset_overrides[0][0]), \
-                  "'" str "' string takes too much space");
-CHARSET_OVERRIDE_LIST(EMPTY_START, ASSERT_ENTRY, EMPTY_END)
 
 static const unsigned char bg_attribs[8] = // Color
 {
@@ -254,7 +237,6 @@ struct Screen {
 typedef struct CCaptionSubContext {
     AVClass *class;
     int real_time;
-    int real_time_latency_msec;
     int data_field;
     struct Screen screen[2];
     int active_screen;
@@ -278,6 +260,7 @@ typedef struct CCaptionSubContext {
 
 static av_cold int init_decoder(AVCodecContext *avctx)
 {
+    int ret;
     CCaptionSubContext *ctx = avctx->priv_data;
 
     av_bprint_init(&ctx->buffer[0], 0, AV_BPRINT_SIZE_UNLIMITED);
@@ -287,7 +270,7 @@ static av_cold int init_decoder(AVCodecContext *avctx)
     ctx->bg_color = CCCOL_BLACK;
     ctx->rollup = 2;
     ctx->cursor_row = 10;
-    return ff_ass_subtitle_header(avctx, "Monospace",
+    ret = ff_ass_subtitle_header(avctx, "Monospace",
                                  ASS_DEFAULT_FONT_SIZE,
                                  ASS_DEFAULT_COLOR,
                                  ASS_DEFAULT_BACK_COLOR,
@@ -296,6 +279,11 @@ static av_cold int init_decoder(AVCodecContext *avctx)
                                  ASS_DEFAULT_UNDERLINE,
                                  3,
                                  ASS_DEFAULT_ALIGNMENT);
+    if (ret < 0) {
+        return ret;
+    }
+
+    return ret;
 }
 
 static av_cold int close_decoder(AVCodecContext *avctx)
@@ -359,7 +347,7 @@ static void write_char(CCaptionSubContext *ctx, struct Screen *screen, char ch)
         return;
     }
     else {
-        av_log(ctx, AV_LOG_WARNING, "Data ignored due to columns exceeding screen width\n");
+        av_log(ctx, AV_LOG_WARNING, "Data Ignored since exceeding screen width\n");
         return;
     }
 }
@@ -587,7 +575,7 @@ static int capture_screen(CCaptionSubContext *ctx)
                 prev_color = color[j];
                 prev_bg_color = bg[j];
                 override = charset_overrides[(int)charset[j]][(int)row[j]];
-                if (override[0]) {
+                if (override) {
                     av_bprintf(&ctx->buffer[bidx], "%s%s%s%s%s", e_tag, s_tag, c_tag, b_tag, override);
                     seen_char = 1;
                 } else if (row[j] == ' ' && !seen_char) {
@@ -848,10 +836,10 @@ static int process_cc608(CCaptionSubContext *ctx, uint8_t hi, uint8_t lo)
     return ret;
 }
 
-static int decode(AVCodecContext *avctx, AVSubtitle *sub,
-                  int *got_sub, const AVPacket *avpkt)
+static int decode(AVCodecContext *avctx, void *data, int *got_sub, AVPacket *avpkt)
 {
     CCaptionSubContext *ctx = avctx->priv_data;
+    AVSubtitle *sub = data;
     int64_t in_time = sub->pts;
     int64_t start_time;
     int64_t end_time;
@@ -860,7 +848,6 @@ static int decode(AVCodecContext *avctx, AVSubtitle *sub,
     int len = avpkt->size;
     int ret = 0;
     int i;
-    unsigned nb_rect_allocated = 0;
 
     for (i = 0; i < len; i += 3) {
         uint8_t hi, cc_type = bptr[i] & 1;
@@ -897,7 +884,7 @@ static int decode(AVCodecContext *avctx, AVSubtitle *sub,
                                                      AV_TIME_BASE_Q, ms_tb);
             else
                 sub->end_display_time = -1;
-            ret = ff_ass_add_rect2(sub, ctx->buffer[bidx].str, ctx->readorder++, 0, NULL, NULL, &nb_rect_allocated);
+            ret = ff_ass_add_rect(sub, ctx->buffer[bidx].str, ctx->readorder++, 0, NULL, NULL);
             if (ret < 0)
                 return ret;
             ctx->last_real_time = sub->pts;
@@ -907,10 +894,9 @@ static int decode(AVCodecContext *avctx, AVSubtitle *sub,
 
     if (!bptr && !ctx->real_time && ctx->buffer[!ctx->buffer_index].str[0]) {
         bidx = !ctx->buffer_index;
-        ret = ff_ass_add_rect2(sub, ctx->buffer[bidx].str, ctx->readorder++, 0, NULL, NULL, &nb_rect_allocated);
+        ret = ff_ass_add_rect(sub, ctx->buffer[bidx].str, ctx->readorder++, 0, NULL, NULL);
         if (ret < 0)
             return ret;
-        av_bprint_clear(&ctx->buffer[bidx]);
         sub->pts = ctx->buffer_time[1];
         sub->end_display_time = av_rescale_q(ctx->buffer_time[1] - ctx->buffer_time[0],
                                              AV_TIME_BASE_Q, ms_tb);
@@ -919,52 +905,51 @@ static int decode(AVCodecContext *avctx, AVSubtitle *sub,
     }
 
     if (ctx->real_time && ctx->screen_touched &&
-        sub->pts >= ctx->last_real_time + av_rescale_q(ctx->real_time_latency_msec, ms_tb, AV_TIME_BASE_Q)) {
+        sub->pts > ctx->last_real_time + av_rescale_q(200, ms_tb, AV_TIME_BASE_Q)) {
         ctx->last_real_time = sub->pts;
         ctx->screen_touched = 0;
 
         capture_screen(ctx);
         ctx->buffer_changed = 0;
 
-        ret = ff_ass_add_rect2(sub, ctx->buffer[bidx].str, ctx->readorder++, 0, NULL, NULL, &nb_rect_allocated);
+        ret = ff_ass_add_rect(sub, ctx->buffer[bidx].str, ctx->readorder++, 0, NULL, NULL);
         if (ret < 0)
             return ret;
         sub->end_display_time = -1;
     }
 
     *got_sub = sub->num_rects > 0;
-    return avpkt->size;
+    return ret;
 }
 
 #define OFFSET(x) offsetof(CCaptionSubContext, x)
 #define SD AV_OPT_FLAG_SUBTITLE_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption options[] = {
     { "real_time", "emit subtitle events as they are decoded for real-time display", OFFSET(real_time), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, SD },
-    { "real_time_latency_msec", "minimum elapsed time between emitting real-time subtitle events", OFFSET(real_time_latency_msec), AV_OPT_TYPE_INT, { .i64 = 200 }, 0, 500, SD },
-    { "data_field", "select data field", OFFSET(data_field), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 1, SD, .unit = "data_field" },
-    { "auto",   "pick first one that appears", 0, AV_OPT_TYPE_CONST, { .i64 =-1 }, 0, 0, SD, .unit = "data_field" },
-    { "first",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, SD, .unit = "data_field" },
-    { "second", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, SD, .unit = "data_field" },
+    { "data_field", "select data field", OFFSET(data_field), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 1, SD, "data_field" },
+    { "auto",   "pick first one that appears", 0, AV_OPT_TYPE_CONST, { .i64 =-1 }, 0, 0, SD, "data_field" },
+    { "first",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, SD, "data_field" },
+    { "second", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, SD, "data_field" },
     {NULL}
 };
 
 static const AVClass ccaption_dec_class = {
-    .class_name = "Closed Captions Decoder",
+    .class_name = "Closed caption Decoder",
     .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFCodec ff_ccaption_decoder = {
-    .p.name         = "cc_dec",
-    CODEC_LONG_NAME("Closed Captions (EIA-608 / CEA-708)"),
-    .p.type         = AVMEDIA_TYPE_SUBTITLE,
-    .p.id           = AV_CODEC_ID_EIA_608,
-    .p.priv_class   = &ccaption_dec_class,
-    .p.capabilities = AV_CODEC_CAP_DELAY,
+AVCodec ff_ccaption_decoder = {
+    .name           = "cc_dec",
+    .long_name      = NULL_IF_CONFIG_SMALL("Closed Caption (EIA-608 / CEA-708)"),
+    .type           = AVMEDIA_TYPE_SUBTITLE,
+    .id             = AV_CODEC_ID_EIA_608,
     .priv_data_size = sizeof(CCaptionSubContext),
     .init           = init_decoder,
     .close          = close_decoder,
     .flush          = flush_decoder,
-    FF_CODEC_DECODE_SUB_CB(decode),
+    .decode         = decode,
+    .priv_class     = &ccaption_dec_class,
+    .capabilities   = AV_CODEC_CAP_DELAY,
 };

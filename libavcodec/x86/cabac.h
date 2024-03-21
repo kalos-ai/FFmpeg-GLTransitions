@@ -177,13 +177,8 @@
 
 #if HAVE_7REGS && !BROKEN_COMPILER
 #define get_cabac_inline get_cabac_inline_x86
-static
-#if ARCH_X86_32
-av_noinline
-#else
-av_always_inline
-#endif
-int get_cabac_inline_x86(CABACContext *c, uint8_t *const state)
+static av_always_inline int get_cabac_inline_x86(CABACContext *c,
+                                                 uint8_t *const state)
 {
     int bit, tmp;
 #ifdef BROKEN_RELOCATIONS

@@ -20,13 +20,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdint.h>
+#include <inttypes.h>
+#include <limits.h>
 
-#include "config.h"
 #include "libavutil/avassert.h"
-#include "libavutil/intmath.h"
+#include "avcodec.h"
 #include "mathops.h"
 #include "celp_math.h"
+#include "libavutil/common.h"
 
 #ifdef G729_BITEXACT
 static const uint16_t exp2a[]=
@@ -122,7 +123,6 @@ void ff_celp_math_init(CELPMContext *c)
 {
     c->dot_productf   = ff_dot_productf;
 
-#if HAVE_MIPSFPU
-    ff_celp_math_init_mips(c);
-#endif
+    if(HAVE_MIPSFPU)
+        ff_celp_math_init_mips(c);
 }

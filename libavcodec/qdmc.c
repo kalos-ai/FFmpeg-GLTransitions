@@ -21,19 +21,18 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #define BITSTREAM_READER_LE
 
 #include "libavutil/channel_layout.h"
-#include "libavutil/mem_internal.h"
 #include "libavutil/thread.h"
-#include "libavutil/tx.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
+#include "fft.h"
 
 typedef struct QDMCTone {
     uint8_t mode;
@@ -67,10 +66,8 @@ typedef struct QDMCContext {
     float *buffer_ptr;
     int rndval;
 
-    DECLARE_ALIGNED(32, AVComplexFloat, cmplx_in)[2][512];
-    DECLARE_ALIGNED(32, AVComplexFloat, cmplx_out)[2][512];
-    AVTXContext *fft_ctx;
-    av_tx_fn itx_fn;
+    DECLARE_ALIGNED(32, FFTComplex, cmplx)[2][512];
+    FFTContext fft_ctx;
 } QDMCContext;
 
 static float sin_table[512];
@@ -169,12 +166,12 @@ static av_cold void qdmc_init_static_data(void)
     int i;
 
     for (unsigned i = 0, offset = 0; i < FF_ARRAY_ELEMS(vtable); i++) {
-        static VLCElem vlc_buffer[13698];
+        static VLC_TYPE vlc_buffer[13698][2];
         vtable[i].table           = &vlc_buffer[offset];
         vtable[i].table_allocated = FF_ARRAY_ELEMS(vlc_buffer) - offset;
-        ff_vlc_init_from_lengths(&vtable[i], huff_bits[i], huff_sizes[i],
+        ff_init_vlc_from_lengths(&vtable[i], huff_bits[i], huff_sizes[i],
                                  &hufftab[0][1], 2, &hufftab[0][0], 2, 1, -1,
-                                 VLC_INIT_LE | VLC_INIT_STATIC_OVERLONG, NULL);
+                                 INIT_VLC_LE | INIT_VLC_STATIC_OVERLONG, NULL);
         hufftab += huff_sizes[i];
         offset  += vtable[i].table_size;
     }
@@ -210,7 +207,6 @@ static av_cold int qdmc_decode_init(AVCodecContext *avctx)
     static AVOnce init_static_once = AV_ONCE_INIT;
     QDMCContext *s = avctx->priv_data;
     int ret, fft_size, fft_order, size, g, j, x;
-    float scale = 1.f;
     GetByteContext b;
 
     ff_thread_once(&init_static_once, qdmc_init_static_data);
@@ -249,14 +245,13 @@ static av_cold int qdmc_decode_init(AVCodecContext *avctx)
     }
     bytestream2_skipu(&b, 4);
 
-    s->nb_channels = bytestream2_get_be32u(&b);
+    avctx->channels = s->nb_channels = bytestream2_get_be32u(&b);
     if (s->nb_channels <= 0 || s->nb_channels > 2) {
         av_log(avctx, AV_LOG_ERROR, "invalid number of channels\n");
         return AVERROR_INVALIDDATA;
     }
-    av_channel_layout_uninit(&avctx->ch_layout);
-    avctx->ch_layout = s->nb_channels == 2 ? (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO :
-                                             (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    avctx->channel_layout = avctx->channels == 2 ? AV_CH_LAYOUT_STEREO :
+                                                   AV_CH_LAYOUT_MONO;
 
     avctx->sample_rate = bytestream2_get_be32u(&b);
     avctx->bit_rate = bytestream2_get_be32u(&b);
@@ -282,7 +277,7 @@ static av_cold int qdmc_decode_init(AVCodecContext *avctx)
     s->frame_size = 1 << s->frame_bits;
     s->subframe_size = s->frame_size >> 5;
 
-    if (avctx->ch_layout.nb_channels == 2)
+    if (avctx->channels == 2)
         x = 3 * x / 2;
     s->band_index = noise_bands_selector[FFMIN(6, llrint(floor(avctx->bit_rate * 3.0 / (double)x + 0.5)))];
 
@@ -296,7 +291,7 @@ static av_cold int qdmc_decode_init(AVCodecContext *avctx)
         return AVERROR_INVALIDDATA;
     }
 
-    ret = av_tx_init(&s->fft_ctx, &s->itx_fn, AV_TX_FLOAT_FFT, 1, 1 << fft_order, &scale, 0);
+    ret = ff_fft_init(&s->fft_ctx, fft_order, 1);
     if (ret < 0)
         return ret;
 
@@ -316,7 +311,7 @@ static av_cold int qdmc_decode_close(AVCodecContext *avctx)
 {
     QDMCContext *s = avctx->priv_data;
 
-    av_tx_uninit(&s->fft_ctx);
+    ff_fft_end(&s->fft_ctx);
 
     return 0;
 }
@@ -646,21 +641,22 @@ static int decode_frame(QDMCContext *s, GetBitContext *gb, int16_t *out)
 
         for (ch = 0; ch < s->nb_channels; ch++) {
             for (i = 0; i < s->subframe_size; i++) {
-                s->cmplx_in[ch][i].re = s->fft_buffer[ch + 2][s->fft_offset + n * s->subframe_size + i];
-                s->cmplx_in[ch][i].im = s->fft_buffer[ch + 0][s->fft_offset + n * s->subframe_size + i];
-                s->cmplx_in[ch][s->subframe_size + i].re = 0;
-                s->cmplx_in[ch][s->subframe_size + i].im = 0;
+                s->cmplx[ch][i].re = s->fft_buffer[ch + 2][s->fft_offset + n * s->subframe_size + i];
+                s->cmplx[ch][i].im = s->fft_buffer[ch + 0][s->fft_offset + n * s->subframe_size + i];
+                s->cmplx[ch][s->subframe_size + i].re = 0;
+                s->cmplx[ch][s->subframe_size + i].im = 0;
             }
         }
 
         for (ch = 0; ch < s->nb_channels; ch++) {
-            s->itx_fn(s->fft_ctx, s->cmplx_out[ch], s->cmplx_in[ch], sizeof(float));
+            s->fft_ctx.fft_permute(&s->fft_ctx, s->cmplx[ch]);
+            s->fft_ctx.fft_calc(&s->fft_ctx, s->cmplx[ch]);
         }
 
         r = &s->buffer_ptr[s->nb_channels * n * s->subframe_size];
         for (i = 0; i < 2 * s->subframe_size; i++) {
             for (ch = 0; ch < s->nb_channels; ch++) {
-                *r++ += s->cmplx_out[ch][i].re;
+                *r++ += s->cmplx[ch][i].re;
             }
         }
 
@@ -696,10 +692,11 @@ static av_cold void qdmc_flush(AVCodecContext *avctx)
     s->buffer_offset = 0;
 }
 
-static int qdmc_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int qdmc_decode_frame(AVCodecContext *avctx, void *data,
                              int *got_frame_ptr, AVPacket *avpkt)
 {
     QDMCContext *s = avctx->priv_data;
+    AVFrame *frame = data;
     GetBitContext gb;
     int ret;
 
@@ -728,15 +725,16 @@ static int qdmc_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     return ret;
 }
 
-const FFCodec ff_qdmc_decoder = {
-    .p.name           = "qdmc",
-    CODEC_LONG_NAME("QDesign Music Codec 1"),
-    .p.type           = AVMEDIA_TYPE_AUDIO,
-    .p.id             = AV_CODEC_ID_QDMC,
+AVCodec ff_qdmc_decoder = {
+    .name             = "qdmc",
+    .long_name        = NULL_IF_CONFIG_SMALL("QDesign Music Codec 1"),
+    .type             = AVMEDIA_TYPE_AUDIO,
+    .id               = AV_CODEC_ID_QDMC,
     .priv_data_size   = sizeof(QDMCContext),
     .init             = qdmc_decode_init,
     .close            = qdmc_decode_close,
-    FF_CODEC_DECODE_CB(qdmc_decode_frame),
+    .decode           = qdmc_decode_frame,
     .flush            = qdmc_flush,
-    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE,
 };

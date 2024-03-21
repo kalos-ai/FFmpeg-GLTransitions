@@ -22,13 +22,15 @@
 #include <stdarg.h>
 #include "avcodec.h"
 #include "libavutil/opt.h"
+#include "libavutil/avassert.h"
+#include "libavutil/avstring.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mem.h"
 #include "libavutil/common.h"
 #include "ass_split.h"
 #include "ass.h"
 #include "bytestream.h"
-#include "codec_internal.h"
+#include "internal.h"
 
 #define STYLE_FLAG_BOLD         (1<<0)
 #define STYLE_FLAG_ITALIC       (1<<1)
@@ -83,6 +85,7 @@ typedef struct {
     uint8_t box_flags;
     StyleBox d;
     uint16_t text_pos;
+    uint16_t byte_count;
     char **fonts;
     int font_count;
     double font_scale_factor;
@@ -169,6 +172,7 @@ static int mov_text_encode_close(AVCodecContext *avctx)
     ff_ass_split_free(s->ass_ctx);
     av_freep(&s->style_attributes);
     av_freep(&s->fonts);
+    av_bprint_finalize(&s->buffer, NULL);
     return 0;
 }
 
@@ -181,9 +185,6 @@ static int encode_sample_description(AVCodecContext *avctx)
     int font_names_total_len = 0;
     MovTextContext *s = avctx->priv_data;
     uint8_t buf[30], *p = buf;
-    int ret;
-
-    av_bprint_init(&s->buffer, 0, INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE + 1);
 
     //  0x00, 0x00, 0x00, 0x00, // uint32_t displayFlags
     //  0x01,                   // int8_t horizontal-justification
@@ -307,23 +308,19 @@ static int encode_sample_description(AVCodecContext *avctx)
     //     };
 
     if (!av_bprint_is_complete(&s->buffer)) {
-        ret = AVERROR(ENOMEM);
-        goto fail;
+        return AVERROR(ENOMEM);
     }
 
     avctx->extradata_size = s->buffer.len;
     avctx->extradata = av_mallocz(avctx->extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
     if (!avctx->extradata) {
-        ret = AVERROR(ENOMEM);
-        goto fail;
+        return AVERROR(ENOMEM);
     }
 
     memcpy(avctx->extradata, s->buffer.str, avctx->extradata_size);
-    ret = 0;
-fail:
-    av_bprint_finalize(&s->buffer, NULL);
+    av_bprint_clear(&s->buffer);
 
-    return ret;
+    return 0;
 }
 
 static av_cold int mov_text_encode_init(AVCodecContext *avctx)
@@ -331,6 +328,8 @@ static av_cold int mov_text_encode_init(AVCodecContext *avctx)
     int ret;
     MovTextContext *s = avctx->priv_data;
     s->avctx = avctx;
+
+    av_bprint_init(&s->buffer, 0, AV_BPRINT_SIZE_UNLIMITED);
 
     s->ass_ctx = ff_ass_split(avctx->subtitle_header);
     if (!s->ass_ctx)
@@ -497,10 +496,8 @@ static void mov_text_alpha_cb(void *priv, int alpha, int alpha_id)
 
 static uint16_t find_font_id(MovTextContext *s, const char *name)
 {
-    if (!name)
-        return 1;
-
-    for (int i = 0; i < s->font_count; i++) {
+    int i;
+    for (i = 0; i < s->font_count; i++) {
         if (!strcmp(name, s->fonts[i]))
             return i + 1;
     }
@@ -588,9 +585,9 @@ static void mov_text_cancel_overrides_cb(void *priv, const char *style_name)
     mov_text_ass_style_set(s, style);
 }
 
-static unsigned utf8_strlen(const char *text, int len)
+static uint16_t utf8_strlen(const char *text, int len)
 {
-    unsigned i = 0, ret = 0;
+    uint16_t i = 0, ret = 0;
     while (i < len) {
         char c = text[i];
         if ((c & 0x80) == 0)
@@ -610,18 +607,20 @@ static unsigned utf8_strlen(const char *text, int len)
 
 static void mov_text_text_cb(void *priv, const char *text, int len)
 {
-    unsigned utf8_len = utf8_strlen(text, len);
+    uint16_t utf8_len = utf8_strlen(text, len);
     MovTextContext *s = priv;
     av_bprint_append_data(&s->buffer, text, len);
     // If it's not utf-8, just use the byte length
     s->text_pos += utf8_len ? utf8_len : len;
+    s->byte_count += len;
 }
 
 static void mov_text_new_line_cb(void *priv, int forced)
 {
     MovTextContext *s = priv;
+    av_bprint_append_data(&s->buffer, "\n", 1);
     s->text_pos += 1;
-    av_bprint_chars(&s->buffer, '\n', 1);
+    s->byte_count += 1;
 }
 
 static const ASSCodesCallbacks mov_text_callbacks = {
@@ -642,15 +641,12 @@ static int mov_text_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     MovTextContext *s = avctx->priv_data;
     ASSDialog *dialog;
     int i, length;
+    size_t j;
 
-    if (bufsize < 3)
-        goto too_small;
-
+    s->byte_count = 0;
     s->text_pos = 0;
     s->count = 0;
     s->box_flags = 0;
-
-    av_bprint_init_for_buffer(&s->buffer, buf + 2, bufsize - 2);
     for (i = 0; i < sub->num_rects; i++) {
         const char *ass = sub->rects[i]->ass;
 
@@ -659,32 +655,55 @@ static int mov_text_encode_frame(AVCodecContext *avctx, unsigned char *buf,
             return AVERROR(EINVAL);
         }
 
-        dialog = ff_ass_split_dialog(s->ass_ctx, ass);
-        if (!dialog)
-            return AVERROR(ENOMEM);
-        mov_text_dialog(s, dialog);
-        ff_ass_split_override_codes(&mov_text_callbacks, s, dialog->text);
-        ff_ass_free_dialog(&dialog);
+#if FF_API_ASS_TIMING
+        if (!strncmp(ass, "Dialogue: ", 10)) {
+            int num;
+            dialog = ff_ass_split_dialog(s->ass_ctx, ass, 0, &num);
+            for (; dialog && num--; dialog++) {
+                mov_text_dialog(s, dialog);
+                ff_ass_split_override_codes(&mov_text_callbacks, s, dialog->text);
+            }
+        } else {
+#endif
+            dialog = ff_ass_split_dialog2(s->ass_ctx, ass);
+            if (!dialog)
+                return AVERROR(ENOMEM);
+            mov_text_dialog(s, dialog);
+            ff_ass_split_override_codes(&mov_text_callbacks, s, dialog->text);
+            ff_ass_free_dialog(&dialog);
+#if FF_API_ASS_TIMING
+        }
+#endif
+
+        for (j = 0; j < box_count; j++) {
+            box_types[j].encode(s);
+        }
     }
 
-    if (s->buffer.len > UINT16_MAX)
-        return AVERROR(ERANGE);
-    AV_WB16(buf, s->buffer.len);
-
-    for (size_t j = 0; j < box_count; j++)
-        box_types[j].encode(s);
-
-    if (!s->buffer.len)
-        return 0;
+    AV_WB16(buf, s->byte_count);
+    buf += 2;
 
     if (!av_bprint_is_complete(&s->buffer)) {
-too_small:
-        av_log(avctx, AV_LOG_ERROR, "Buffer too small for ASS event.\n");
-        return AVERROR_BUFFER_TOO_SMALL;
+        length = AVERROR(ENOMEM);
+        goto exit;
     }
 
+    if (!s->buffer.len) {
+        length = 0;
+        goto exit;
+    }
+
+    if (s->buffer.len > bufsize - 3) {
+        av_log(avctx, AV_LOG_ERROR, "Buffer too small for ASS event.\n");
+        length = AVERROR_BUFFER_TOO_SMALL;
+        goto exit;
+    }
+
+    memcpy(buf, s->buffer.str, s->buffer.len);
     length = s->buffer.len + 2;
 
+exit:
+    av_bprint_clear(&s->buffer);
     return length;
 }
 
@@ -702,15 +721,15 @@ static const AVClass mov_text_encoder_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFCodec ff_movtext_encoder = {
-    .p.name         = "mov_text",
-    CODEC_LONG_NAME("3GPP Timed Text subtitle"),
-    .p.type         = AVMEDIA_TYPE_SUBTITLE,
-    .p.id           = AV_CODEC_ID_MOV_TEXT,
+AVCodec ff_movtext_encoder = {
+    .name           = "mov_text",
+    .long_name      = NULL_IF_CONFIG_SMALL("3GPP Timed Text subtitle"),
+    .type           = AVMEDIA_TYPE_SUBTITLE,
+    .id             = AV_CODEC_ID_MOV_TEXT,
     .priv_data_size = sizeof(MovTextContext),
-    .p.priv_class   = &mov_text_encoder_class,
+    .priv_class     = &mov_text_encoder_class,
     .init           = mov_text_encode_init,
-    FF_CODEC_ENCODE_SUB_CB(mov_text_encode_frame),
+    .encode_sub     = mov_text_encode_frame,
     .close          = mov_text_encode_close,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

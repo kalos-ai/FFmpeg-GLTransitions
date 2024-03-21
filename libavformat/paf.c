@@ -22,7 +22,6 @@
 #include "libavutil/channel_layout.h"
 #include "libavcodec/paf.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 #define MAGIC "Packed Animation File V1.0\n(c) 1992-96 Amazing Studio\x0a\x1a"
@@ -95,7 +94,7 @@ static int read_header(AVFormatContext *s)
     PAFDemuxContext *p  = s->priv_data;
     AVIOContext     *pb = s->pb;
     AVStream        *ast, *vst;
-    int frame_ms, ret = 0;
+    int ret = 0;
 
     avio_skip(pb, 132);
 
@@ -107,9 +106,7 @@ static int read_header(AVFormatContext *s)
     vst->nb_frames  =
     vst->duration   =
     p->nb_frames    = avio_rl32(pb);
-    frame_ms        = avio_rl32(pb);
-    if (frame_ms < 1)
-        return AVERROR_INVALIDDATA;
+    avio_skip(pb, 4);
 
     vst->codecpar->width  = avio_rl32(pb);
     vst->codecpar->height = avio_rl32(pb);
@@ -118,7 +115,7 @@ static int read_header(AVFormatContext *s)
     vst->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
     vst->codecpar->codec_tag  = 0;
     vst->codecpar->codec_id   = AV_CODEC_ID_PAF_VIDEO;
-    avpriv_set_pts_info(vst, 64, frame_ms, 1000);
+    avpriv_set_pts_info(vst, 64, 1, 10);
 
     ast = avformat_new_stream(s, 0);
     if (!ast)
@@ -128,7 +125,8 @@ static int read_header(AVFormatContext *s)
     ast->codecpar->codec_type     = AVMEDIA_TYPE_AUDIO;
     ast->codecpar->codec_tag      = 0;
     ast->codecpar->codec_id       = AV_CODEC_ID_PAF_AUDIO;
-    ast->codecpar->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+    ast->codecpar->channels       = 2;
+    ast->codecpar->channel_layout = AV_CH_LAYOUT_STEREO;
     ast->codecpar->sample_rate    = 22050;
     avpriv_set_pts_info(ast, 64, 1, 22050);
 
@@ -174,20 +172,22 @@ static int read_header(AVFormatContext *s)
         !p->blocks_offset_table ||
         !p->video_frame         ||
         !p->audio_frame         ||
-        !p->temp_audio_frame)
-        return AVERROR(ENOMEM);
+        !p->temp_audio_frame) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
 
     avio_seek(pb, p->buffer_size, SEEK_SET);
 
     ret = read_table(s, p->blocks_count_table,  p->nb_frames);
     if (ret < 0)
-        return ret;
+        goto fail;
     ret = read_table(s, p->frames_offset_table, p->nb_frames);
     if (ret < 0)
-        return ret;
+        goto fail;
     ret = read_table(s, p->blocks_offset_table, p->frame_blks);
     if (ret < 0)
-        return ret;
+        goto fail;
 
     p->got_audio = 0;
     p->current_frame = 0;
@@ -196,6 +196,11 @@ static int read_header(AVFormatContext *s)
     avio_seek(pb, p->start_offset, SEEK_SET);
 
     return 0;
+
+fail:
+    read_close(s);
+
+    return ret;
 }
 
 static int read_packet(AVFormatContext *s, AVPacket *pkt)
@@ -266,11 +271,10 @@ static int read_packet(AVFormatContext *s, AVPacket *pkt)
     return pkt->size;
 }
 
-const FFInputFormat ff_paf_demuxer = {
-    .p.name         = "paf",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Amazing Studio Packed Animation File"),
+AVInputFormat ff_paf_demuxer = {
+    .name           = "paf",
+    .long_name      = NULL_IF_CONFIG_SMALL("Amazing Studio Packed Animation File"),
     .priv_data_size = sizeof(PAFDemuxContext),
-    .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = read_probe,
     .read_header    = read_header,
     .read_packet    = read_packet,

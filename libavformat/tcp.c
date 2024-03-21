@@ -36,8 +36,6 @@ typedef struct TCPContext {
     const AVClass *class;
     int fd;
     int listen;
-    char *local_port;
-    char *local_addr;
     int open_timeout;
     int rw_timeout;
     int listen_timeout;
@@ -54,8 +52,6 @@ typedef struct TCPContext {
 #define E AV_OPT_FLAG_ENCODING_PARAM
 static const AVOption options[] = {
     { "listen",          "Listen for incoming connections",  OFFSET(listen),         AV_OPT_TYPE_INT, { .i64 = 0 },     0,       2,       .flags = D|E },
-    { "local_port",      "Local port",                                         OFFSET(local_port),     AV_OPT_TYPE_STRING, { .str = NULL },     0,       0, .flags = D|E },
-    { "local_addr",      "Local address",                                      OFFSET(local_addr),     AV_OPT_TYPE_STRING, { .str = NULL },     0,       0, .flags = D|E },
     { "timeout",     "set timeout (in microseconds) of socket I/O operations", OFFSET(rw_timeout),     AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
     { "listen_timeout",  "Connection awaiting timeout (in milliseconds)",      OFFSET(listen_timeout), AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
     { "send_buffer_size", "Socket send buffer size (in bytes)",                OFFSET(send_buffer_size), AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
@@ -74,40 +70,9 @@ static const AVClass tcp_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-static int customize_fd(void *ctx, int fd, int family)
+static void customize_fd(void *ctx, int fd)
 {
     TCPContext *s = ctx;
-
-    if (s->local_addr || s->local_port) {
-        struct addrinfo hints = { 0 }, *ai, *cur_ai;
-        int ret;
-
-        hints.ai_family = family;
-        hints.ai_socktype = SOCK_STREAM;
-
-        ret = getaddrinfo(s->local_addr, s->local_port, &hints, &ai);
-        if (ret) {
-            av_log(ctx, AV_LOG_ERROR,
-               "Failed to getaddrinfo local addr: %s port: %s err: %s\n",
-               s->local_addr, s->local_port, gai_strerror(ret));
-            return ret;
-        }
-
-        cur_ai = ai;
-        while (cur_ai) {
-            ret = bind(fd, (struct sockaddr *)cur_ai->ai_addr, (int)cur_ai->ai_addrlen);
-            if (ret)
-                cur_ai = cur_ai->ai_next;
-            else
-                break;
-        }
-        freeaddrinfo(ai);
-
-        if (ret) {
-            ff_log_net_error(ctx, AV_LOG_ERROR, "bind local failed");
-            return ret;
-        }
-    }
     /* Set the socket's send or receive buffer sizes, if specified.
        If unspecified or setting fails, system default is used. */
     if (s->recv_buffer_size > 0) {
@@ -132,8 +97,6 @@ static int customize_fd(void *ctx, int fd, int family)
         }
     }
 #endif /* !HAVE_WINSOCK2_H */
-
-    return 0;
 }
 
 /* return non zero if error */
@@ -166,26 +129,11 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
             if (buf == endptr)
                 s->listen = 1;
         }
-        if (av_find_info_tag(buf, sizeof(buf), "local_port", p)) {
-            av_freep(&s->local_port);
-            s->local_port = av_strdup(buf);
-            if (!s->local_port)
-                return AVERROR(ENOMEM);
-        }
-        if (av_find_info_tag(buf, sizeof(buf), "local_addr", p)) {
-            av_freep(&s->local_addr);
-            s->local_addr = av_strdup(buf);
-            if (!s->local_addr)
-                return AVERROR(ENOMEM);
-        }
         if (av_find_info_tag(buf, sizeof(buf), "timeout", p)) {
             s->rw_timeout = strtol(buf, NULL, 10);
         }
         if (av_find_info_tag(buf, sizeof(buf), "listen_timeout", p)) {
             s->listen_timeout = strtol(buf, NULL, 10);
-        }
-        if (av_find_info_tag(buf, sizeof(buf), "tcp_nodelay", p)) {
-            s->tcp_nodelay = strtol(buf, NULL, 10);
         }
     }
     if (s->rw_timeout >= 0) {
@@ -224,7 +172,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         while (cur_ai && fd < 0) {
             fd = ff_socket(cur_ai->ai_family,
                            cur_ai->ai_socktype,
-                           cur_ai->ai_protocol, h);
+                           cur_ai->ai_protocol);
             if (fd < 0) {
                 ret = ff_neterrno();
                 cur_ai = cur_ai->ai_next;
@@ -232,12 +180,12 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         }
         if (fd < 0)
             goto fail1;
-        customize_fd(s, fd, cur_ai->ai_family);
+        customize_fd(s, fd);
     }
 
     if (s->listen == 2) {
         // multi-client
-        if ((ret = ff_listen(fd, cur_ai->ai_addr, cur_ai->ai_addrlen, h)) < 0)
+        if ((ret = ff_listen(fd, cur_ai->ai_addr, cur_ai->ai_addrlen)) < 0)
             goto fail1;
     } else if (s->listen == 1) {
         // single client

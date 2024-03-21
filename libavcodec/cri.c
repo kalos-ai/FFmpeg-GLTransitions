@@ -31,9 +31,8 @@
 #include "libavutil/display.h"
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
 #include "thread.h"
 
 typedef struct CRIContext {
@@ -70,6 +69,7 @@ static av_cold int cri_decode_init(AVCodecContext *avctx)
         return AVERROR(ENOMEM);
     s->jpeg_avctx->flags = avctx->flags;
     s->jpeg_avctx->flags2 = avctx->flags2;
+    s->jpeg_avctx->dct_algo = avctx->dct_algo;
     s->jpeg_avctx->idct_algo = avctx->idct_algo;
     ret = avcodec_open2(s->jpeg_avctx, codec, NULL);
     if (ret < 0)
@@ -169,14 +169,16 @@ static void unpack_10bit(GetByteContext *gb, uint16_t *dst, int shift,
     }
 }
 
-static int cri_decode_frame(AVCodecContext *avctx, AVFrame *p,
+static int cri_decode_frame(AVCodecContext *avctx, void *data,
                             int *got_frame, AVPacket *avpkt)
 {
     CRIContext *s = avctx->priv_data;
     GetByteContext *gb = &s->gb;
+    ThreadFrame frame = { .f = data };
     int ret, bps, hflip = 0, vflip = 0;
     AVFrameSideData *rotation;
     int compressed = 0;
+    AVFrame *p = data;
 
     s->data = NULL;
     s->data_size = 0;
@@ -316,10 +318,7 @@ skip:
     if (!s->data || !s->data_size)
         return AVERROR_INVALIDDATA;
 
-    if (avctx->skip_frame >= AVDISCARD_ALL)
-        return avpkt->size;
-
-    if ((ret = ff_thread_get_buffer(avctx, p, 0)) < 0)
+    if ((ret = ff_thread_get_buffer(avctx, &frame, 0)) < 0)
         return ret;
 
     avctx->bits_per_raw_sample = bps;
@@ -398,8 +397,8 @@ skip:
     }
 
     if (hflip || vflip) {
-        ff_frame_new_side_data(avctx, p, AV_FRAME_DATA_DISPLAYMATRIX,
-                               sizeof(int32_t) * 9, &rotation);
+        rotation = av_frame_new_side_data(p, AV_FRAME_DATA_DISPLAYMATRIX,
+                                          sizeof(int32_t) * 9);
         if (rotation) {
             av_display_rotation_set((int32_t *)rotation->data, 0.f);
             av_display_matrix_flip((int32_t *)rotation->data, hflip, vflip);
@@ -407,7 +406,7 @@ skip:
     }
 
     p->pict_type = AV_PICTURE_TYPE_I;
-    p->flags |= AV_FRAME_FLAG_KEY;
+    p->key_frame = 1;
 
     *got_frame = 1;
 
@@ -425,16 +424,15 @@ static av_cold int cri_decode_close(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_cri_decoder = {
-    .p.name         = "cri",
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_CRI,
+AVCodec ff_cri_decoder = {
+    .name           = "cri",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_CRI,
     .priv_data_size = sizeof(CRIContext),
     .init           = cri_decode_init,
-    FF_CODEC_DECODE_CB(cri_decode_frame),
+    .decode         = cri_decode_frame,
     .close          = cri_decode_close,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP |
-                      FF_CODEC_CAP_SKIP_FRAME_FILL_PARAM,
-    CODEC_LONG_NAME("Cintel RAW"),
+    .capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP,
+    .long_name      = NULL_IF_CONFIG_SMALL("Cintel RAW"),
 };

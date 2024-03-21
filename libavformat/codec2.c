@@ -19,17 +19,13 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
+#include <memory.h>
 #include "libavcodec/codec2utils.h"
-#include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
-#include "libavutil/opt.h"
 #include "avio_internal.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
-#include "mux.h"
+#include "rawdec.h"
 #include "rawenc.h"
 #include "pcm.h"
 
@@ -132,8 +128,9 @@ static int codec2_read_header_common(AVFormatContext *s, AVStream *st)
     st->codecpar->codec_type        = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id          = AV_CODEC_ID_CODEC2;
     st->codecpar->sample_rate       = 8000;
+    st->codecpar->channels          = 1;
     st->codecpar->format            = AV_SAMPLE_FMT_S16;
-    st->codecpar->ch_layout         = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    st->codecpar->channel_layout    = AV_CH_LAYOUT_MONO;
     st->codecpar->bit_rate          = codec2_mode_bit_rate(s, mode);
     st->codecpar->frame_size        = codec2_mode_frame_size(s, mode);
     st->codecpar->block_align       = codec2_mode_block_align(s, mode);
@@ -179,7 +176,7 @@ static int codec2_read_header(AVFormatContext *s)
         return AVERROR_PATCHWELCOME;
     }
 
-    ffformatcontext(s)->data_offset = CODEC2_HEADER_SIZE;
+    s->internal->data_offset = CODEC2_HEADER_SIZE;
 
     return codec2_read_header_common(s, st);
 }
@@ -257,6 +254,7 @@ static int codec2raw_read_header(AVFormatContext *s)
         return ret;
     }
 
+    s->internal->data_offset = 0;
     codec2_make_extradata(st->codecpar->extradata, c2->mode);
 
     return codec2_read_header_common(s, st);
@@ -278,6 +276,13 @@ static const AVOption codec2raw_options[] = {
     { NULL },
 };
 
+static const AVClass codec2_mux_class = {
+    .class_name = "codec2 muxer",
+    .item_name  = av_default_item_name,
+    .version    = LIBAVUTIL_VERSION_INT,
+    .category   = AV_CLASS_CATEGORY_DEMUXER,
+};
+
 static const AVClass codec2_demux_class = {
     .class_name = "codec2 demuxer",
     .item_name  = av_default_item_name,
@@ -295,44 +300,46 @@ static const AVClass codec2raw_demux_class = {
 };
 
 #if CONFIG_CODEC2_DEMUXER
-const FFInputFormat ff_codec2_demuxer = {
-    .p.name         = "codec2",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("codec2 .c2 demuxer"),
-    .p.extensions   = "c2",
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.priv_class   = &codec2_demux_class,
+AVInputFormat ff_codec2_demuxer = {
+    .name           = "codec2",
+    .long_name      = NULL_IF_CONFIG_SMALL("codec2 .c2 demuxer"),
     .priv_data_size = sizeof(Codec2Context),
+    .extensions     = "c2",
     .read_probe     = codec2_probe,
     .read_header    = codec2_read_header,
     .read_packet    = codec2_read_packet,
     .read_seek      = ff_pcm_read_seek,
+    .flags          = AVFMT_GENERIC_INDEX,
     .raw_codec_id   = AV_CODEC_ID_CODEC2,
+    .priv_class     = &codec2_demux_class,
 };
 #endif
 
 #if CONFIG_CODEC2_MUXER
-const FFOutputFormat ff_codec2_muxer = {
-    .p.name         = "codec2",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("codec2 .c2 muxer"),
-    .p.extensions   = "c2",
-    .p.audio_codec  = AV_CODEC_ID_CODEC2,
-    .p.video_codec  = AV_CODEC_ID_NONE,
-    .p.flags        = AVFMT_NOTIMESTAMPS,
+AVOutputFormat ff_codec2_muxer = {
+    .name           = "codec2",
+    .long_name      = NULL_IF_CONFIG_SMALL("codec2 .c2 muxer"),
+    .priv_data_size = sizeof(Codec2Context),
+    .extensions     = "c2",
+    .audio_codec    = AV_CODEC_ID_CODEC2,
+    .video_codec    = AV_CODEC_ID_NONE,
     .write_header   = codec2_write_header,
     .write_packet   = ff_raw_write_packet,
+    .flags          = AVFMT_NOTIMESTAMPS,
+    .priv_class     = &codec2_mux_class,
 };
 #endif
 
 #if CONFIG_CODEC2RAW_DEMUXER
-const FFInputFormat ff_codec2raw_demuxer = {
-    .p.name         = "codec2raw",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("raw codec2 demuxer"),
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.priv_class   = &codec2raw_demux_class,
+AVInputFormat ff_codec2raw_demuxer = {
+    .name           = "codec2raw",
+    .long_name      = NULL_IF_CONFIG_SMALL("raw codec2 demuxer"),
     .priv_data_size = sizeof(Codec2Context),
     .read_header    = codec2raw_read_header,
     .read_packet    = codec2_read_packet,
     .read_seek      = ff_pcm_read_seek,
+    .flags          = AVFMT_GENERIC_INDEX,
     .raw_codec_id   = AV_CODEC_ID_CODEC2,
+    .priv_class     = &codec2raw_demux_class,
 };
 #endif

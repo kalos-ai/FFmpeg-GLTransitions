@@ -33,7 +33,6 @@
 #include "libavutil/pixdesc.h"
 #include "libavutil/time.h"
 #include "avdevice.h"
-#include "libavformat/mux.h"
 
 typedef struct {
     AVClass *class;
@@ -51,7 +50,6 @@ typedef struct {
     SDL_Rect texture_rect;
 
     int inited;
-    int warned;
 } SDLContext;
 
 static const struct sdl_texture_format_entry {
@@ -165,15 +163,6 @@ static int sdl2_write_header(AVFormatContext *s)
     AVCodecParameters *codecpar = st->codecpar;
     int i, ret = 0;
     int flags  = 0;
-
-    if (!sdl->warned) {
-        av_log(sdl, AV_LOG_WARNING,
-            "The sdl output device is deprecated due to being fundamentally incompatible with libavformat API. "
-            "For monitoring purposes in ffmpeg you can output to a file or use pipes and a video player.\n"
-            "Example: ffmpeg -i INPUT -f nut -c:v rawvideo - | ffplay -\n"
-        );
-        sdl->warned = 1;
-    }
 
     if (!sdl->window_title)
         sdl->window_title = av_strdup(s->url);
@@ -366,15 +355,15 @@ static const AVClass sdl2_class = {
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_OUTPUT,
 };
 
-const FFOutputFormat ff_sdl2_muxer = {
-    .p.name         = "sdl,sdl2",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("SDL2 output device"),
+AVOutputFormat ff_sdl2_muxer = {
+    .name           = "sdl,sdl2",
+    .long_name      = NULL_IF_CONFIG_SMALL("SDL2 output device"),
     .priv_data_size = sizeof(SDLContext),
-    .p.audio_codec  = AV_CODEC_ID_NONE,
-    .p.video_codec  = AV_CODEC_ID_RAWVIDEO,
+    .audio_codec    = AV_CODEC_ID_NONE,
+    .video_codec    = AV_CODEC_ID_RAWVIDEO,
     .write_header   = sdl2_write_header,
     .write_packet   = sdl2_write_packet,
     .write_trailer  = sdl2_write_trailer,
-    .p.flags        = AVFMT_NOFILE | AVFMT_VARIABLE_FPS | AVFMT_NOTIMESTAMPS,
-    .p.priv_class   = &sdl2_class,
+    .flags          = AVFMT_NOFILE | AVFMT_VARIABLE_FPS | AVFMT_NOTIMESTAMPS,
+    .priv_class     = &sdl2_class,
 };

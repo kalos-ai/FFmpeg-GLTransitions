@@ -373,20 +373,20 @@ static const AVOption hwmap_options[] = {
     { "mode", "Frame mapping mode",
       OFFSET(mode), AV_OPT_TYPE_FLAGS,
       { .i64 = AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE },
-      0, INT_MAX, FLAGS, .unit = "mode" },
+      0, INT_MAX, FLAGS, "mode" },
 
     { "read", "Mapping should be readable",
       0, AV_OPT_TYPE_CONST, { .i64 = AV_HWFRAME_MAP_READ },
-      INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+      INT_MIN, INT_MAX, FLAGS, "mode" },
     { "write", "Mapping should be writeable",
       0, AV_OPT_TYPE_CONST, { .i64 = AV_HWFRAME_MAP_WRITE },
-      INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+      INT_MIN, INT_MAX, FLAGS, "mode" },
     { "overwrite", "Mapping will always overwrite the entire frame",
       0, AV_OPT_TYPE_CONST, { .i64 = AV_HWFRAME_MAP_OVERWRITE },
-      INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+      INT_MIN, INT_MAX, FLAGS, "mode" },
     { "direct", "Mapping should not involve any copying",
       0, AV_OPT_TYPE_CONST, { .i64 = AV_HWFRAME_MAP_DIRECT },
-      INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+      INT_MIN, INT_MAX, FLAGS, "mode" },
 
     { "derive_device", "Derive a new device of this type",
       OFFSET(derive_device_type), AV_OPT_TYPE_STRING,
@@ -404,9 +404,10 @@ static const AVFilterPad hwmap_inputs[] = {
     {
         .name             = "default",
         .type             = AVMEDIA_TYPE_VIDEO,
-        .get_buffer.video = hwmap_get_buffer,
+        .get_video_buffer = hwmap_get_buffer,
         .filter_frame     = hwmap_filter_frame,
     },
+    { NULL }
 };
 
 static const AVFilterPad hwmap_outputs[] = {
@@ -415,17 +416,17 @@ static const AVFilterPad hwmap_outputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = hwmap_config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_hwmap = {
+AVFilter ff_vf_hwmap = {
     .name           = "hwmap",
     .description    = NULL_IF_CONFIG_SMALL("Map hardware frames"),
     .uninit         = hwmap_uninit,
     .priv_size      = sizeof(HWMapContext),
     .priv_class     = &hwmap_class,
-    FILTER_INPUTS(hwmap_inputs),
-    FILTER_OUTPUTS(hwmap_outputs),
-    FILTER_QUERY_FUNC(hwmap_query_formats),
+    .query_formats  = hwmap_query_formats,
+    .inputs         = hwmap_inputs,
+    .outputs        = hwmap_outputs,
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
-    .flags          = AVFILTER_FLAG_HWDEVICE,
 };

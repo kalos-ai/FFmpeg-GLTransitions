@@ -16,7 +16,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "bsf.h"
 #include "bsf_internal.h"
 #include "cbs_bsf.h"
 
@@ -25,12 +24,15 @@ static int cbs_bsf_update_side_data(AVBSFContext *bsf, AVPacket *pkt)
     CBSBSFContext           *ctx = bsf->priv_data;
     CodedBitstreamFragment *frag = &ctx->fragment;
     uint8_t *side_data;
+    buffer_size_t side_data_size;
     int err;
 
-    if (!av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA, NULL))
+    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA,
+                                        &side_data_size);
+    if (!side_data_size)
         return 0;
 
-    err = ff_cbs_read_packet_side_data(ctx->input, frag, pkt);
+    err = ff_cbs_read(ctx->input, frag, side_data, side_data_size);
     if (err < 0) {
         av_log(bsf, AV_LOG_ERROR,
                "Failed to read extradata from packet side data.\n");
@@ -122,11 +124,6 @@ int ff_cbs_bsf_generic_init(AVBSFContext *bsf, const CBSBSFType *type)
     err = ff_cbs_init(&ctx->output, type->codec_id, bsf);
     if (err < 0)
         return err;
-
-    ctx->output->trace_enable = 1;
-    ctx->output->trace_level  = AV_LOG_TRACE;
-    ctx->output->trace_context = ctx->output;
-    ctx->output->trace_write_callback = ff_cbs_trace_write_log;
 
     if (bsf->par_in->extradata) {
         err = ff_cbs_read_extradata(ctx->input, frag, bsf->par_in);

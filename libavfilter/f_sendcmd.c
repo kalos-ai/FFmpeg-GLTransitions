@@ -23,8 +23,6 @@
  * send commands filter
  */
 
-#include "config_components.h"
-
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/eval.h"
@@ -43,30 +41,22 @@
 static const char *const var_names[] = {
     "N",     /* frame number */
     "T",     /* frame time in seconds */
-#if FF_API_FRAME_PKT
     "POS",   /* original position in the file of the frame */
-#endif
     "PTS",   /* frame pts */
     "TS",    /* interval start time in seconds */
     "TE",    /* interval end time in seconds */
     "TI",    /* interval interpolated value: TI = (T - TS) / (TE - TS) */
-    "W",     /* width for video frames */
-    "H",     /* height for video frames */
     NULL
 };
 
 enum var_name {
     VAR_N,
     VAR_T,
-#if FF_API_FRAME_PKT
     VAR_POS,
-#endif
     VAR_PTS,
     VAR_TS,
     VAR_TE,
     VAR_TI,
-    VAR_W,
-    VAR_H,
     VAR_VARS_NB
 };
 
@@ -535,18 +525,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *ref)
                         double current = TS2T(ref->pts, inlink->time_base);
 
                         var_values[VAR_N]   = inlink->frame_count_in;
-#if FF_API_FRAME_PKT
-FF_DISABLE_DEPRECATION_WARNINGS
                         var_values[VAR_POS] = ref->pkt_pos == -1 ? NAN : ref->pkt_pos;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
                         var_values[VAR_PTS] = TS2D(ref->pts);
                         var_values[VAR_T]   = current;
                         var_values[VAR_TS]  = start;
                         var_values[VAR_TE]  = end;
                         var_values[VAR_TI]  = (current - start) / (end - start);
-                        var_values[VAR_W]   = ref->width;
-                        var_values[VAR_H]   = ref->height;
 
                         if ((ret = av_expr_parse_and_eval(&res, cmd->arg, var_names, var_values,
                                                           NULL, NULL, NULL, NULL, NULL, 0, NULL)) < 0) {
@@ -588,9 +572,10 @@ end:
     return AVERROR(ENOSYS);
 }
 
-AVFILTER_DEFINE_CLASS_EXT(sendcmd, "(a)sendcmd", options);
-
 #if CONFIG_SENDCMD_FILTER
+
+#define sendcmd_options options
+AVFILTER_DEFINE_CLASS(sendcmd);
 
 static const AVFilterPad sendcmd_inputs[] = {
     {
@@ -598,17 +583,25 @@ static const AVFilterPad sendcmd_inputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_sendcmd = {
+static const AVFilterPad sendcmd_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_sendcmd = {
     .name        = "sendcmd",
     .description = NULL_IF_CONFIG_SMALL("Send commands to filters."),
     .init        = init,
     .uninit      = uninit,
     .priv_size   = sizeof(SendCmdContext),
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
-    FILTER_INPUTS(sendcmd_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
+    .inputs      = sendcmd_inputs,
+    .outputs     = sendcmd_outputs,
     .priv_class  = &sendcmd_class,
 };
 
@@ -616,24 +609,35 @@ const AVFilter ff_vf_sendcmd = {
 
 #if CONFIG_ASENDCMD_FILTER
 
+#define asendcmd_options options
+AVFILTER_DEFINE_CLASS(asendcmd);
+
 static const AVFilterPad asendcmd_inputs[] = {
     {
         .name         = "default",
         .type         = AVMEDIA_TYPE_AUDIO,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_af_asendcmd = {
+static const AVFilterPad asendcmd_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_AUDIO,
+    },
+    { NULL }
+};
+
+AVFilter ff_af_asendcmd = {
     .name        = "asendcmd",
     .description = NULL_IF_CONFIG_SMALL("Send commands to filters."),
-    .priv_class  = &sendcmd_class,
     .init        = init,
     .uninit      = uninit,
     .priv_size   = sizeof(SendCmdContext),
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
-    FILTER_INPUTS(asendcmd_inputs),
-    FILTER_OUTPUTS(ff_audio_default_filterpad),
+    .inputs      = asendcmd_inputs,
+    .outputs     = asendcmd_outputs,
+    .priv_class  = &asendcmd_class,
 };
 
 #endif

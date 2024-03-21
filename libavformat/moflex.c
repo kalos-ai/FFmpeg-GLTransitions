@@ -24,7 +24,6 @@
 #include "libavcodec/bytestream.h"
 
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 typedef struct BitReader {
@@ -173,7 +172,8 @@ static int moflex_read_sync(AVFormatContext *s)
         unsigned type, ssize, codec_id = 0;
         unsigned codec_type, width = 0, height = 0, sample_rate = 0, channels = 0;
         int stream_index = -1;
-        AVRational tb = av_make_q(0, 1);
+        int format;
+        AVRational fps;
 
         read_var_byte(s, &type);
         read_var_byte(s, &ssize);
@@ -196,7 +196,6 @@ static int moflex_read_sync(AVFormatContext *s)
                 return AVERROR_PATCHWELCOME;
             }
             sample_rate = avio_rb24(pb) + 1;
-            tb = av_make_q(1, sample_rate);
             channels = avio_r8(pb) + 1;
             break;
         case 1:
@@ -210,10 +209,11 @@ static int moflex_read_sync(AVFormatContext *s)
                 av_log(s, AV_LOG_ERROR, "Unsupported video codec: %d\n", codec_id);
                 return AVERROR_PATCHWELCOME;
             }
-            tb.den = avio_rb16(pb);
-            tb.num = avio_rb16(pb);
+            fps.num = avio_rb16(pb);
+            fps.den = avio_rb16(pb);
             width = avio_rb16(pb);
             height = avio_rb16(pb);
+            format = AV_PIX_FMT_YUV420P;
             avio_skip(pb, type == 3 ? 3 : 2);
             break;
         case 4:
@@ -234,13 +234,16 @@ static int moflex_read_sync(AVFormatContext *s)
             st->codecpar->width      = width;
             st->codecpar->height     = height;
             st->codecpar->sample_rate= sample_rate;
-            st->codecpar->ch_layout.nb_channels = channels;
+            st->codecpar->channels   = channels;
+            st->codecpar->format     = format;
             st->priv_data            = av_packet_alloc();
             if (!st->priv_data)
                 return AVERROR(ENOMEM);
 
-            if (tb.num)
-                avpriv_set_pts_info(st, 63, tb.num, tb.den);
+            if (sample_rate)
+                avpriv_set_pts_info(st, 63, 1, sample_rate);
+            else
+                avpriv_set_pts_info(st, 63, fps.den, fps.num);
         }
     }
 
@@ -366,22 +369,24 @@ static int moflex_read_seek(AVFormatContext *s, int stream_index,
 static int moflex_read_close(AVFormatContext *s)
 {
     for (int i = 0; i < s->nb_streams; i++) {
-        av_packet_free((AVPacket **)&s->streams[i]->priv_data);
+        AVPacket *packet = s->streams[i]->priv_data;
+
+        av_packet_free(&packet);
+        s->streams[i]->priv_data = 0;
     }
 
     return 0;
 }
 
-const FFInputFormat ff_moflex_demuxer = {
-    .p.name         = "moflex",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("MobiClip MOFLEX"),
-    .p.extensions   = "moflex",
-    .p.flags        = AVFMT_GENERIC_INDEX,
+AVInputFormat ff_moflex_demuxer = {
+    .name           = "moflex",
+    .long_name      = NULL_IF_CONFIG_SMALL("MobiClip MOFLEX"),
     .priv_data_size = sizeof(MOFLEXDemuxContext),
     .read_probe     = moflex_probe,
     .read_header    = moflex_read_header,
     .read_packet    = moflex_read_packet,
     .read_seek      = moflex_read_seek,
     .read_close     = moflex_read_close,
-    .flags_internal = FF_FMT_INIT_CLEANUP,
+    .extensions     = "moflex",
+    .flags          = AVFMT_GENERIC_INDEX,
 };

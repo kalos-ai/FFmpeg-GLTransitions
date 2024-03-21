@@ -25,33 +25,33 @@
  * JPEG-LS encoder.
  */
 
-#define UNCHECKED_BITSTREAM_READER 1
-#include "libavutil/opt.h"
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "encode.h"
 #include "get_bits.h"
 #include "put_bits.h"
-#include "put_golomb.h"
+#include "golomb.h"
+#include "internal.h"
 #include "mathops.h"
 #include "mjpeg.h"
+#include "mjpegenc.h"
 #include "jpegls.h"
 
 typedef struct JPEGLSContext {
     AVClass *class;
 
     int pred;
-    int comps;
-
-    size_t size;
-    uint8_t *buf;
 } JPEGLSContext;
 
 static inline void put_marker_byteu(PutByteContext *pb, enum JpegMarker code)
 {
     bytestream2_put_byteu(pb, 0xff);
     bytestream2_put_byteu(pb, code);
+}
+
+static inline void put_marker_byte(PutByteContext *pb, enum JpegMarker code)
+{
+    bytestream2_put_byte(pb, 0xff);
+    bytestream2_put_byte(pb, code);
 }
 
 /**
@@ -279,22 +279,66 @@ static int encode_picture_ls(AVCodecContext *avctx, AVPacket *pkt,
     const uint8_t *in;
     uint8_t *last = NULL;
     JLSState state = { 0 };
-    size_t size;
-    int i, ret, size_in_bits;
+    int i, size, ret;
     int comps;
 
-    last = av_mallocz(FFABS(p->linesize[0]));
+#if FF_API_PRIVATE_OPT
+FF_DISABLE_DEPRECATION_WARNINGS
+    if (avctx->prediction_method)
+        ctx->pred = avctx->prediction_method;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
+
+    if (avctx->pix_fmt == AV_PIX_FMT_GRAY8 ||
+        avctx->pix_fmt == AV_PIX_FMT_GRAY16)
+        comps = 1;
+    else
+        comps = 3;
+
+    if ((ret = ff_alloc_packet2(avctx, pkt, avctx->width  *avctx->height * comps * 4 +
+                                AV_INPUT_BUFFER_MIN_SIZE, 0)) < 0)
+        return ret;
+
+    last = av_malloc((unsigned)pkt->size + FFABS(p->linesize[0]));
     if (!last)
         return AVERROR(ENOMEM);
+    memset(last, 0, FFABS(p->linesize[0]));
 
-    init_put_bits(&pb2, ctx->buf, ctx->size);
+    bytestream2_init_writer(&pb, pkt->data, pkt->size);
+    init_put_bits(&pb2, last + FFABS(p->linesize[0]), pkt->size);
 
-    comps = ctx->comps;
+    /* write our own JPEG header, can't use mjpeg_picture_header */
+    put_marker_byteu(&pb, SOI);
+    put_marker_byteu(&pb, SOF48);
+    bytestream2_put_be16u(&pb, 8 + comps * 3); // header size depends on components
+    bytestream2_put_byteu(&pb, (avctx->pix_fmt == AV_PIX_FMT_GRAY16) ? 16 : 8);  // bpp
+    bytestream2_put_be16u(&pb, avctx->height);
+    bytestream2_put_be16u(&pb, avctx->width);
+    bytestream2_put_byteu(&pb, comps);          // components
+    for (i = 1; i <= comps; i++) {
+        bytestream2_put_byteu(&pb, i);     // component ID
+        bytestream2_put_byteu(&pb, 0x11);  // subsampling: none
+        bytestream2_put_byteu(&pb, 0);     // Tiq, used by JPEG-LS ext
+    }
+
+    put_marker_byteu(&pb, SOS);
+    bytestream2_put_be16u(&pb, 6 + comps * 2);
+    bytestream2_put_byteu(&pb, comps);
+    for (i = 1; i <= comps; i++) {
+        bytestream2_put_byteu(&pb, i);   // component ID
+        bytestream2_put_byteu(&pb, 0);   // mapping index: none
+    }
+    bytestream2_put_byteu(&pb, ctx->pred);
+    bytestream2_put_byteu(&pb, (comps > 1) ? 1 : 0);  // interleaving: 0 - plane, 1 - line
+    bytestream2_put_byteu(&pb, 0);  // point transform: none
+
     /* initialize JPEG-LS state from JPEG parameters */
     state.near = ctx->pred;
     state.bpp  = (avctx->pix_fmt == AV_PIX_FMT_GRAY16) ? 16 : 8;
     ff_jpegls_reset_coding_parameters(&state, 0);
     ff_jpegls_init_state(&state);
+
+    ls_store_lse(&state, &pb);
 
     in = p->data[0];
     if (avctx->pix_fmt == AV_PIX_FMT_GRAY8) {
@@ -344,122 +388,65 @@ static int encode_picture_ls(AVCodecContext *avctx, AVPacket *pkt,
             in += p->linesize[0];
         }
     }
-    av_free(last);
-    /* Now the actual image data has been written, which enables us to estimate
-     * the needed packet size: For every 15 input bits, an escape bit might be
-     * added below; and if put_bits_count % 15 is >= 8, then another bit might
-     * be added.
-     * Furthermore the specification says that after doing 0xff escaping unused
-     * bits in the last byte must be set to 0, so just append 7 "optional" zero
-     * bits to avoid special-casing. This also simplifies the size calculation:
-     * Properly rounding up is now automatically baked-in. */
+
+    /* the specification says that after doing 0xff escaping unused bits in
+     * the last byte must be set to 0, so just append 7 "optional" zero bits
+     * to avoid special-casing. */
     put_bits(&pb2, 7, 0);
-    /* Make sure that the bit count + padding is representable in an int;
-       necessary for put_bits_count() as well as for using a GetBitContext. */
-    if (put_bytes_count(&pb2, 0) > INT_MAX / 8 - AV_INPUT_BUFFER_PADDING_SIZE)
-        return AVERROR(ERANGE);
-    size_in_bits = put_bits_count(&pb2);
+    size = put_bits_count(&pb2);
     flush_put_bits(&pb2);
-    size  = size_in_bits * 2U / 15;
-    size += 2 + 2 + 2 + 1 + 2 + 2 + 1 + comps * (1 + 1 + 1) + 2 + 2 + 1
-            + comps * (1 + 1) + 1 + 1 + 1; /* Header */
-    size += 2 + 2 + 1 + 2 + 2 + 2 + 2 + 2; /* LSE */
-    size += 2; /* EOI */
-    if ((ret = ff_get_encode_buffer(avctx, pkt, size, 0)) < 0)
-        return ret;
-
-    bytestream2_init_writer(&pb, pkt->data, pkt->size);
-
-    /* write our own JPEG header, can't use mjpeg_picture_header */
-    put_marker_byteu(&pb, SOI);
-    put_marker_byteu(&pb, SOF48);
-    bytestream2_put_be16u(&pb, 8 + comps * 3); // header size depends on components
-    bytestream2_put_byteu(&pb, (avctx->pix_fmt == AV_PIX_FMT_GRAY16) ? 16 : 8);  // bpp
-    bytestream2_put_be16u(&pb, avctx->height);
-    bytestream2_put_be16u(&pb, avctx->width);
-    bytestream2_put_byteu(&pb, comps);          // components
-    for (i = 1; i <= comps; i++) {
-        bytestream2_put_byteu(&pb, i);     // component ID
-        bytestream2_put_byteu(&pb, 0x11);  // subsampling: none
-        bytestream2_put_byteu(&pb, 0);     // Tiq, used by JPEG-LS ext
-    }
-
-    put_marker_byteu(&pb, SOS);
-    bytestream2_put_be16u(&pb, 6 + comps * 2);
-    bytestream2_put_byteu(&pb, comps);
-    for (i = 1; i <= comps; i++) {
-        bytestream2_put_byteu(&pb, i);   // component ID
-        bytestream2_put_byteu(&pb, 0);   // mapping index: none
-    }
-    bytestream2_put_byteu(&pb, ctx->pred);
-    bytestream2_put_byteu(&pb, (comps > 1) ? 1 : 0);  // interleaving: 0 - plane, 1 - line
-    bytestream2_put_byteu(&pb, 0);  // point transform: none
-
-    ls_store_lse(&state, &pb);
-
     /* do escape coding */
-    init_get_bits(&gb, pb2.buf, size_in_bits);
-    size_in_bits -= 7;
-    while (get_bits_count(&gb) < size_in_bits) {
+    init_get_bits(&gb, pb2.buf, size);
+    size -= 7;
+    while (get_bits_count(&gb) < size) {
         int v;
         v = get_bits(&gb, 8);
-        bytestream2_put_byteu(&pb, v);
+        bytestream2_put_byte(&pb, v);
         if (v == 0xFF) {
             v = get_bits(&gb, 7);
-            bytestream2_put_byteu(&pb, v);
+            bytestream2_put_byte(&pb, v);
         }
     }
+    av_freep(&last);
 
     /* End of image */
-    put_marker_byteu(&pb, EOI);
+    put_marker_byte(&pb, EOI);
 
-    av_shrink_packet(pkt, bytestream2_tell_p(&pb));
+    emms_c();
+
+    pkt->size   = bytestream2_tell_p(&pb);
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
     return 0;
 }
 
-static av_cold int encode_jpegls_init(AVCodecContext *avctx)
+static av_cold int encode_init_ls(AVCodecContext *ctx)
 {
-    JPEGLSContext *ctx = avctx->priv_data;
-    size_t size;
+#if FF_API_CODED_FRAME
+FF_DISABLE_DEPRECATION_WARNINGS
+    ctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
+    ctx->coded_frame->key_frame = 1;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
 
-    if ((avctx->width | avctx->height) > UINT16_MAX) {
-        av_log(avctx, AV_LOG_ERROR, "Dimensions exceeding 65535x65535\n");
-        return AVERROR(EINVAL);
+    if (ctx->pix_fmt != AV_PIX_FMT_GRAY8  &&
+        ctx->pix_fmt != AV_PIX_FMT_GRAY16 &&
+        ctx->pix_fmt != AV_PIX_FMT_RGB24  &&
+        ctx->pix_fmt != AV_PIX_FMT_BGR24) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Only grayscale and RGB24/BGR24 images are supported\n");
+        return -1;
     }
-    if (avctx->pix_fmt == AV_PIX_FMT_GRAY8 ||
-        avctx->pix_fmt == AV_PIX_FMT_GRAY16)
-        ctx->comps = 1;
-    else
-        ctx->comps = 3;
-    size = FF_INPUT_BUFFER_MIN_SIZE;
-    /* INT_MAX due to PutBit-API. */
-    if (avctx->width * (unsigned)avctx->height > (INT_MAX - size) / 4 / ctx->comps)
-        return AVERROR(ERANGE);
-    size += 4 * ctx->comps * avctx->width * avctx->height;
-    ctx->size = size;
-    ctx->buf = av_malloc(size + AV_INPUT_BUFFER_PADDING_SIZE);
-    if (!ctx->buf)
-        return AVERROR(ENOMEM);
-
-    return 0;
-}
-
-static av_cold int encode_jpegls_close(AVCodecContext *avctx)
-{
-    JPEGLSContext *ctx = avctx->priv_data;
-
-    av_freep(&ctx->buf);
     return 0;
 }
 
 #define OFFSET(x) offsetof(JPEGLSContext, x)
 #define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
 static const AVOption options[] = {
-{ "pred", "Prediction method", OFFSET(pred), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, VE, .unit = "pred" },
-    { "left",   NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, INT_MIN, INT_MAX, VE, .unit = "pred" },
-    { "plane",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 1 }, INT_MIN, INT_MAX, VE, .unit = "pred" },
-    { "median", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 2 }, INT_MIN, INT_MAX, VE, .unit = "pred" },
+{ "pred", "Prediction method", OFFSET(pred), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, VE, "pred" },
+    { "left",   NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, INT_MIN, INT_MAX, VE, "pred" },
+    { "plane",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 1 }, INT_MIN, INT_MAX, VE, "pred" },
+    { "median", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = 2 }, INT_MIN, INT_MAX, VE, "pred" },
 
     { NULL},
 };
@@ -471,22 +458,21 @@ static const AVClass jpegls_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFCodec ff_jpegls_encoder = {
-    .p.name         = "jpegls",
-    CODEC_LONG_NAME("JPEG-LS"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_JPEGLS,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
-                      AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+AVCodec ff_jpegls_encoder = {
+    .name           = "jpegls",
+    .long_name      = NULL_IF_CONFIG_SMALL("JPEG-LS"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_JPEGLS,
     .priv_data_size = sizeof(JPEGLSContext),
-    .p.priv_class   = &jpegls_class,
-    .init           = encode_jpegls_init,
-    FF_CODEC_ENCODE_CB(encode_picture_ls),
-    .close          = encode_jpegls_close,
-    .p.pix_fmts     = (const enum AVPixelFormat[]) {
+    .priv_class     = &jpegls_class,
+    .init           = encode_init_ls,
+    .capabilities   = AV_CODEC_CAP_FRAME_THREADS,
+    .encode2        = encode_picture_ls,
+    .pix_fmts       = (const enum AVPixelFormat[]) {
         AV_PIX_FMT_BGR24, AV_PIX_FMT_RGB24,
         AV_PIX_FMT_GRAY8, AV_PIX_FMT_GRAY16,
         AV_PIX_FMT_NONE
     },
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE |
+                      FF_CODEC_CAP_INIT_CLEANUP,
 };

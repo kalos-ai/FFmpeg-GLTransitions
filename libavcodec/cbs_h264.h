@@ -272,27 +272,6 @@ typedef struct H264RawSEIRecoveryPoint {
     uint8_t changing_slice_group_idc;
 } H264RawSEIRecoveryPoint;
 
-typedef struct H264RawFilmGrainCharacteristics {
-    uint8_t      film_grain_characteristics_cancel_flag;
-    uint8_t      film_grain_model_id;
-    uint8_t      separate_colour_description_present_flag;
-    uint8_t      film_grain_bit_depth_luma_minus8;
-    uint8_t      film_grain_bit_depth_chroma_minus8;
-    uint8_t      film_grain_full_range_flag;
-    uint8_t      film_grain_colour_primaries;
-    uint8_t      film_grain_transfer_characteristics;
-    uint8_t      film_grain_matrix_coefficients;
-    uint8_t      blending_mode_id;
-    uint8_t      log2_scale_factor;
-    uint8_t      comp_model_present_flag[3];
-    uint8_t      num_intensity_intervals_minus1[3];
-    uint8_t      num_model_values_minus1[3];
-    uint8_t      intensity_interval_lower_bound[3][256];
-    uint8_t      intensity_interval_upper_bound[3][256];
-    int16_t      comp_model_value[3][256][6];
-    uint8_t      film_grain_characteristics_repetition_period;
-} H264RawFilmGrainCharacteristics;
-
 typedef struct H264RawSEIDisplayOrientation {
     uint8_t display_orientation_cancel_flag;
     uint8_t hor_flip;
@@ -407,8 +386,10 @@ typedef struct CodedBitstreamH264Context {
 
     // All currently available parameter sets.  These are updated when
     // any parameter set NAL unit is read/written with this context.
-    H264RawSPS *sps[H264_MAX_SPS_COUNT]; ///< RefStruct references
-    H264RawPPS *pps[H264_MAX_PPS_COUNT]; ///< RefStruct references
+    AVBufferRef *sps_ref[H264_MAX_SPS_COUNT];
+    AVBufferRef *pps_ref[H264_MAX_PPS_COUNT];
+    H264RawSPS *sps[H264_MAX_SPS_COUNT];
+    H264RawPPS *pps[H264_MAX_PPS_COUNT];
 
     // The currently active parameter sets.  These are updated when any
     // NAL unit refers to the relevant parameter set.  These pointers

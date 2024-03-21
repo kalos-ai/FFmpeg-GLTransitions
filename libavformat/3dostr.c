@@ -21,7 +21,6 @@
 
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 static int threedostr_probe(const AVProbeData *p)
@@ -103,15 +102,15 @@ static int threedostr_read_header(AVFormatContext *s)
 
             st->codecpar->codec_type  = AVMEDIA_TYPE_AUDIO;
             st->codecpar->sample_rate = avio_rb32(s->pb);
-            st->codecpar->ch_layout.nb_channels = avio_rb32(s->pb);
-            if (st->codecpar->ch_layout.nb_channels <= 0 || st->codecpar->sample_rate <= 0)
+            st->codecpar->channels    = avio_rb32(s->pb);
+            if (st->codecpar->channels <= 0 || st->codecpar->sample_rate <= 0)
                 return AVERROR_INVALIDDATA;
             codec                  = avio_rl32(s->pb);
             avio_skip(s->pb, 4);
             if (ctrl_size == 20 || ctrl_size == 3 || ctrl_size == -1)
-                st->duration       = (avio_rb32(s->pb) - 1) / st->codecpar->ch_layout.nb_channels;
+                st->duration       = (avio_rb32(s->pb) - 1) / st->codecpar->channels;
             else
-                st->duration       = avio_rb32(s->pb) * 16 / st->codecpar->ch_layout.nb_channels;
+                st->duration       = avio_rb32(s->pb) * 16 / st->codecpar->channels;
             size -= 56;
             found_shdr = 1;
             break;
@@ -136,7 +135,7 @@ static int threedostr_read_header(AVFormatContext *s)
     switch (codec) {
     case MKTAG('S','D','X','2'):
         st->codecpar->codec_id    = AV_CODEC_ID_SDX2_DPCM;
-        st->codecpar->block_align = 1 * st->codecpar->ch_layout.nb_channels;
+        st->codecpar->block_align = 1 * st->codecpar->channels;
         break;
     default:
         avpriv_request_sample(s, "codec %X", codec);
@@ -179,7 +178,7 @@ static int threedostr_read_packet(AVFormatContext *s, AVPacket *pkt)
             ret = av_get_packet(s->pb, pkt, size);
             pkt->pos = pos;
             pkt->stream_index = 0;
-            pkt->duration = size / st->codecpar->ch_layout.nb_channels;
+            pkt->duration = size / st->codecpar->channels;
             return ret;
         default:
             av_log(s, AV_LOG_DEBUG, "skipping unknown chunk: %X\n", chunk);
@@ -192,12 +191,12 @@ static int threedostr_read_packet(AVFormatContext *s, AVPacket *pkt)
     return AVERROR_EOF;
 }
 
-const FFInputFormat ff_threedostr_demuxer = {
-    .p.name         = "3dostr",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("3DO STR"),
-    .p.extensions   = "str",
-    .p.flags        = AVFMT_GENERIC_INDEX,
+AVInputFormat ff_threedostr_demuxer = {
+    .name           = "3dostr",
+    .long_name      = NULL_IF_CONFIG_SMALL("3DO STR"),
     .read_probe     = threedostr_probe,
     .read_header    = threedostr_read_header,
     .read_packet    = threedostr_read_packet,
+    .extensions     = "str",
+    .flags          = AVFMT_GENERIC_INDEX,
 };

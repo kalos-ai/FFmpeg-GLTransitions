@@ -50,9 +50,7 @@ static const char *const var_names[] = {
     "x",
     "y",
     "n",            ///< number of frame
-#if FF_API_FRAME_PKT
     "pos",          ///< position in the file
-#endif
     "t",            ///< timestamp expressed in seconds
     NULL
 };
@@ -70,9 +68,7 @@ enum var_name {
     VAR_X,
     VAR_Y,
     VAR_N,
-#if FF_API_FRAME_PKT
     VAR_POS,
-#endif
     VAR_T,
     VAR_VARS_NB
 };
@@ -97,9 +93,13 @@ typedef struct CropContext {
 
 static int query_formats(AVFilterContext *ctx)
 {
-    int reject_flags = AV_PIX_FMT_FLAG_BITSTREAM | FF_PIX_FMT_FLAG_SW_FLAT_SUB;
+    AVFilterFormats *formats = NULL;
+    int ret;
 
-    return ff_set_common_formats(ctx, ff_formats_pixdesc_filter(0, reject_flags));
+    ret = ff_formats_pixdesc_filter(&formats, 0, AV_PIX_FMT_FLAG_BITSTREAM | FF_PIX_FMT_FLAG_SW_FLAT_SUB);
+    if (ret < 0)
+        return ret;
+    return ff_set_common_formats(ctx, formats);
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
@@ -149,9 +149,7 @@ static int config_input(AVFilterLink *link)
     s->var_values[VAR_OUT_H] = s->var_values[VAR_OH] = NAN;
     s->var_values[VAR_N]     = 0;
     s->var_values[VAR_T]     = NAN;
-#if FF_API_FRAME_PKT
     s->var_values[VAR_POS]   = NAN;
-#endif
 
     av_image_fill_max_pixsteps(s->max_step, NULL, pix_desc);
 
@@ -263,12 +261,8 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     s->var_values[VAR_N] = link->frame_count_out;
     s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?
         NAN : frame->pts * av_q2d(link->time_base);
-#if FF_API_FRAME_PKT
-FF_DISABLE_DEPRECATION_WARNINGS
     s->var_values[VAR_POS] = frame->pkt_pos == -1 ?
         NAN : frame->pkt_pos;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
     s->var_values[VAR_X] = av_expr_eval(s->x_pexpr, s->var_values, NULL);
     s->var_values[VAR_Y] = av_expr_eval(s->y_pexpr, s->var_values, NULL);
     /* It is necessary if x is expressed from y  */
@@ -290,8 +284,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
         s->y &= ~((1 << s->vsub) - 1);
     }
 
-    av_log(ctx, AV_LOG_TRACE, "n:%d t:%f x:%d y:%d x+w:%d y+h:%d\n",
-            (int)s->var_values[VAR_N], s->var_values[VAR_T],
+    av_log(ctx, AV_LOG_TRACE, "n:%d t:%f pos:%f x:%d y:%d x+w:%d y+h:%d\n",
+            (int)s->var_values[VAR_N], s->var_values[VAR_T], s->var_values[VAR_POS],
             s->x, s->y, s->x+s->w, s->y+s->h);
 
     if (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) {
@@ -306,7 +300,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
         frame->data[0] += s->y * frame->linesize[0];
         frame->data[0] += s->x * s->max_step[0];
 
-        if (!(desc->flags & AV_PIX_FMT_FLAG_PAL)) {
+        if (!(desc->flags & AV_PIX_FMT_FLAG_PAL || desc->flags & FF_PSEUDOPAL)) {
             for (i = 1; i < 3; i ++) {
                 if (frame->data[i]) {
                     frame->data[i] += (s->y >> s->vsub) * frame->linesize[i];
@@ -386,6 +380,7 @@ static const AVFilterPad avfilter_vf_crop_inputs[] = {
         .filter_frame = filter_frame,
         .config_props = config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad avfilter_vf_crop_outputs[] = {
@@ -394,16 +389,17 @@ static const AVFilterPad avfilter_vf_crop_outputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_crop = {
+AVFilter ff_vf_crop = {
     .name            = "crop",
     .description     = NULL_IF_CONFIG_SMALL("Crop the input video."),
     .priv_size       = sizeof(CropContext),
     .priv_class      = &crop_class,
+    .query_formats   = query_formats,
     .uninit          = uninit,
-    FILTER_INPUTS(avfilter_vf_crop_inputs),
-    FILTER_OUTPUTS(avfilter_vf_crop_outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    .inputs          = avfilter_vf_crop_inputs,
+    .outputs         = avfilter_vf_crop_outputs,
     .process_command = process_command,
 };

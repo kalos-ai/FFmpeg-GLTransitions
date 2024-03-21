@@ -29,7 +29,6 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
-#include "filters.h"
 #include "formats.h"
 #include "internal.h"
 #include "video.h"
@@ -58,11 +57,11 @@ typedef struct TelecineContext {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 
 static const AVOption telecine_options[] = {
-    {"first_field", "select first field", OFFSET(first_field), AV_OPT_TYPE_INT,   {.i64=0}, 0, 1, FLAGS, .unit = "field"},
-        {"top",    "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "field"},
-        {"t",      "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, .unit = "field"},
-        {"bottom", "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "field"},
-        {"b",      "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, .unit = "field"},
+    {"first_field", "select first field", OFFSET(first_field), AV_OPT_TYPE_INT,   {.i64=0}, 0, 1, FLAGS, "field"},
+        {"top",    "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "field"},
+        {"t",      "select top field first",                0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGS, "field"},
+        {"bottom", "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "field"},
+        {"b",      "select bottom field first",             0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGS, "field"},
     {"pattern", "pattern that describe for how many fields a frame is to be displayed", OFFSET(pattern), AV_OPT_TYPE_STRING, {.str="23"}, 0, 0, FLAGS},
     {NULL}
 };
@@ -102,11 +101,16 @@ static av_cold int init(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    int reject_flags = AV_PIX_FMT_FLAG_BITSTREAM |
-                       AV_PIX_FMT_FLAG_HWACCEL   |
-                       AV_PIX_FMT_FLAG_PAL;
+    AVFilterFormats *formats = NULL;
+    int ret;
 
-    return ff_set_common_formats(ctx, ff_formats_pixdesc_filter(0, reject_flags));
+    ret = ff_formats_pixdesc_filter(&formats, 0,
+                                    AV_PIX_FMT_FLAG_BITSTREAM |
+                                    AV_PIX_FMT_FLAG_PAL |
+                                    AV_PIX_FMT_FLAG_HWACCEL);
+    if (ret < 0)
+        return ret;
+    return ff_set_common_formats(ctx, formats);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -183,11 +187,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *inpicref)
     }
 
     if (s->occupied) {
-        ret = ff_inlink_make_frame_writable(inlink, &s->frame[nout]);
-        if (ret < 0) {
-            av_frame_free(&inpicref);
-            return ret;
-        }
+        av_frame_make_writable(s->frame[nout]);
         for (i = 0; i < s->nb_planes; i++) {
             // fill in the EARLIER field from the buffered pic
             av_image_copy_plane(s->frame[nout]->data[i] + s->frame[nout]->linesize[i] * s->first_field,
@@ -204,17 +204,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *inpicref)
                                 s->stride[i],
                                 (s->planeheight[i] - !s->first_field + 1) / 2);
         }
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
         s->frame[nout]->interlaced_frame = 1;
         s->frame[nout]->top_field_first  = !s->first_field;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-        s->frame[nout]->flags |= AV_FRAME_FLAG_INTERLACED;
-        if (s->first_field)
-            s->frame[nout]->flags &= ~AV_FRAME_FLAG_TOP_FIELD_FIRST;
-        else
-            s->frame[nout]->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
         nout++;
         len--;
         s->occupied = 0;
@@ -222,23 +213,14 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     while (len >= 2) {
         // output THIS image as-is
-        ret = ff_inlink_make_frame_writable(inlink, &s->frame[nout]);
-        if (ret < 0) {
-            av_frame_free(&inpicref);
-            return ret;
-        }
+        av_frame_make_writable(s->frame[nout]);
         for (i = 0; i < s->nb_planes; i++)
             av_image_copy_plane(s->frame[nout]->data[i], s->frame[nout]->linesize[i],
                                 inpicref->data[i], inpicref->linesize[i],
                                 s->stride[i],
                                 s->planeheight[i]);
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
         s->frame[nout]->interlaced_frame = inpicref->interlaced_frame;
         s->frame[nout]->top_field_first  = inpicref->top_field_first;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-        s->frame[nout]->flags |= (inpicref->flags & (AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST));
         nout++;
         len -= 2;
     }
@@ -255,8 +237,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     for (i = 0; i < nout; i++) {
         AVFrame *frame = av_frame_clone(s->frame[i]);
-        int interlaced = frame ? !!(frame->flags & AV_FRAME_FLAG_INTERLACED)      : 0;
-        int tff        = frame ? !!(frame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) : 0;
+        int interlaced = frame ? frame->interlaced_frame : 0;
+        int tff        = frame ? frame->top_field_first  : 0;
 
         if (!frame) {
             av_frame_free(&inpicref);
@@ -264,20 +246,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
         }
 
         av_frame_copy_props(frame, inpicref);
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
         frame->interlaced_frame = interlaced;
         frame->top_field_first  = tff;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-        if (interlaced)
-            frame->flags |= AV_FRAME_FLAG_INTERLACED;
-        else
-            frame->flags &= ~AV_FRAME_FLAG_INTERLACED;
-        if (tff)
-            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
-        else
-            frame->flags &= ~AV_FRAME_FLAG_TOP_FIELD_FIRST;
         frame->pts = ((s->start_time == AV_NOPTS_VALUE) ? 0 : s->start_time) +
                      av_rescale(outlink->frame_count_in, s->ts_unit.num,
                                 s->ts_unit.den);
@@ -305,6 +275,7 @@ static const AVFilterPad telecine_inputs[] = {
         .filter_frame  = filter_frame,
         .config_props  = config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad telecine_outputs[] = {
@@ -313,16 +284,17 @@ static const AVFilterPad telecine_outputs[] = {
         .type          = AVMEDIA_TYPE_VIDEO,
         .config_props  = config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_telecine = {
+AVFilter ff_vf_telecine = {
     .name          = "telecine",
     .description   = NULL_IF_CONFIG_SMALL("Apply a telecine pattern."),
     .priv_size     = sizeof(TelecineContext),
     .priv_class    = &telecine_class,
     .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(telecine_inputs),
-    FILTER_OUTPUTS(telecine_outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    .query_formats = query_formats,
+    .inputs        = telecine_inputs,
+    .outputs       = telecine_outputs,
 };

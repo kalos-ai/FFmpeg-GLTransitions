@@ -24,9 +24,10 @@
  * X-Face decoder, based on libcompface, by James Ashton.
  */
 
+#include "libavutil/pixdesc.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "bytestream.h"
+#include "internal.h"
 #include "xface.h"
 
 static int pop_integer(BigInt *b, const ProbRange *pranges)
@@ -107,8 +108,9 @@ static av_cold int xface_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
-                              int *got_frame, AVPacket *avpkt)
+static int xface_decode_frame(AVCodecContext *avctx,
+                              void *data, int *got_frame,
+                              AVPacket *avpkt)
 {
     XFaceContext *xface = avctx->priv_data;
     int ret, i, j, k;
@@ -116,6 +118,7 @@ static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     BigInt b = {0};
     char *buf;
     int64_t c;
+    AVFrame *frame = data;
 
     if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
         return ret;
@@ -173,13 +176,14 @@ static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     return avpkt->size;
 }
 
-const FFCodec ff_xface_decoder = {
-    .p.name         = "xface",
-    CODEC_LONG_NAME("X-face image"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_XFACE,
-    .p.capabilities = AV_CODEC_CAP_DR1,
+AVCodec ff_xface_decoder = {
+    .name           = "xface",
+    .long_name      = NULL_IF_CONFIG_SMALL("X-face image"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_XFACE,
     .priv_data_size = sizeof(XFaceContext),
     .init           = xface_decode_init,
-    FF_CODEC_DECODE_CB(xface_decode_frame),
+    .decode         = xface_decode_frame,
+    .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_MONOWHITE, AV_PIX_FMT_NONE },
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

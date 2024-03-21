@@ -25,7 +25,6 @@
 #include <stddef.h>
 #include "avformat.h"
 #include "libavutil/bprint.h"
-#include "avio_internal.h"
 
 enum sub_sort {
     SUB_SORT_TS_POS = 0,    ///< sort by timestamps, then position
@@ -43,7 +42,7 @@ typedef struct {
     AVIOContext *pb;
     unsigned char buf[8];
     int buf_pos, buf_len;
-    FFIOContext buf_pb;
+    AVIOContext buf_pb;
 } FFTextReader;
 
 /**
@@ -68,7 +67,7 @@ void ff_text_init_avio(void *s, FFTextReader *r, AVIOContext *pb);
  * @param buf buffer to read from (referenced as long as FFTextReader is in use)
  * @param size size of buf
  */
-void ff_text_init_buf(FFTextReader *r, const void *buf, size_t size);
+void ff_text_init_buf(FFTextReader *r, void *buf, size_t size);
 
 /**
  * Return the byte position of the next byte returned by ff_text_r8(). For
@@ -121,12 +120,6 @@ AVPacket *ff_subtitles_queue_insert(FFDemuxSubtitlesQueue *q,
                                     const uint8_t *event, size_t len, int merge);
 
 /**
- * Same as ff_subtitles_queue_insert but takes an AVBPrint input.
- * Avoids common errors like handling incomplete AVBPrint.
- */
-AVPacket *ff_subtitles_queue_insert_bprint(FFDemuxSubtitlesQueue *q,
-                                           const AVBPrint *event, int merge);
-/**
  * Set missing durations, sort subtitles by PTS (and then byte position), and
  * drop duplicated events.
  */
@@ -140,7 +133,7 @@ int ff_subtitles_queue_read_packet(FFDemuxSubtitlesQueue *q, AVPacket *pkt);
 
 /**
  * Update current_sub_idx to emulate a seek. Except the first parameter, it
- * matches FFInputFormat->read_seek2 prototypes.
+ * matches AVInputFormat->read_seek2 prototypes.
  */
 int ff_subtitles_queue_seek(FFDemuxSubtitlesQueue *q, AVFormatContext *s, int stream_index,
                             int64_t min_ts, int64_t ts, int64_t max_ts, int flags);
@@ -150,18 +143,10 @@ int ff_subtitles_queue_seek(FFDemuxSubtitlesQueue *q, AVFormatContext *s, int st
  */
 void ff_subtitles_queue_clean(FFDemuxSubtitlesQueue *q);
 
-int ff_subtitles_read_packet(AVFormatContext *s, AVPacket *pkt);
-
-int ff_subtitles_read_seek(AVFormatContext *s, int stream_index,
-                           int64_t min_ts, int64_t ts, int64_t max_ts, int flags);
-
-int ff_subtitles_read_close(AVFormatContext *s);
-
 /**
  * SMIL helper to load next chunk ("<...>" or untagged content) in buf.
  *
  * @param c cached character, to avoid a backward seek
- * @return size of chunk or error, e.g. AVERROR(ENOMEM) on incomplete buf
  */
 int ff_smil_extract_next_text_chunk(FFTextReader *tr, AVBPrint *buf, char *c);
 
@@ -176,8 +161,7 @@ const char *ff_smil_get_attr_ptr(const char *s, const char *attr);
 /**
  * @brief Same as ff_subtitles_read_text_chunk(), but read from an AVIOContext.
  */
-av_warn_unused_result
-int ff_subtitles_read_chunk(AVIOContext *pb, AVBPrint *buf);
+void ff_subtitles_read_chunk(AVIOContext *pb, AVBPrint *buf);
 
 /**
  * @brief Read a subtitles chunk from FFTextReader.
@@ -189,12 +173,10 @@ int ff_subtitles_read_chunk(AVIOContext *pb, AVBPrint *buf);
  *
  * @param tr  I/O context
  * @param buf an initialized buf where the chunk is written
- * @return 0 on success, error value otherwise, e.g. AVERROR(ENOMEM) if buf is incomplete
  *
  * @note buf is cleared before writing into it.
  */
-av_warn_unused_result
-int ff_subtitles_read_text_chunk(FFTextReader *tr, AVBPrint *buf);
+void ff_subtitles_read_text_chunk(FFTextReader *tr, AVBPrint *buf);
 
 /**
  * Get the number of characters to increment to jump to the next line, or to

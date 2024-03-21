@@ -26,7 +26,6 @@
 
 #include "avcodec.h"
 #include "bswapdsp.h"
-#include "codec_internal.h"
 #include "decode.h"
 #include "get_bits.h"
 #include "internal.h"
@@ -77,15 +76,15 @@ static av_cold int raw_init_decoder(AVCodecContext *avctx)
 
     if (   avctx->codec_tag == MKTAG('r','a','w',' ')
         || avctx->codec_tag == MKTAG('N','O','1','6'))
-        avctx->pix_fmt = avpriv_pix_fmt_find(PIX_FMT_LIST_MOV,
+        avctx->pix_fmt = avpriv_find_pix_fmt(avpriv_pix_fmt_bps_mov,
                                       avctx->bits_per_coded_sample);
     else if (avctx->codec_tag == MKTAG('W', 'R', 'A', 'W'))
-        avctx->pix_fmt = avpriv_pix_fmt_find(PIX_FMT_LIST_AVI,
+        avctx->pix_fmt = avpriv_find_pix_fmt(avpriv_pix_fmt_bps_avi,
                                       avctx->bits_per_coded_sample);
     else if (avctx->codec_tag && (avctx->codec_tag & 0xFFFFFF) != MKTAG('B','I','T', 0))
-        avctx->pix_fmt = avpriv_pix_fmt_find(PIX_FMT_LIST_RAW, avctx->codec_tag);
+        avctx->pix_fmt = avpriv_find_pix_fmt(ff_raw_pix_fmt_tags, avctx->codec_tag);
     else if (avctx->pix_fmt == AV_PIX_FMT_NONE && avctx->bits_per_coded_sample)
-        avctx->pix_fmt = avpriv_pix_fmt_find(PIX_FMT_LIST_AVI,
+        avctx->pix_fmt = avpriv_find_pix_fmt(avpriv_pix_fmt_bps_avi,
                                       avctx->bits_per_coded_sample);
 
     desc = av_pix_fmt_desc_get(avctx->pix_fmt);
@@ -94,13 +93,19 @@ static av_cold int raw_init_decoder(AVCodecContext *avctx)
         return AVERROR(EINVAL);
     }
 
-    if (desc->flags & AV_PIX_FMT_FLAG_PAL) {
+    if (desc->flags & (AV_PIX_FMT_FLAG_PAL | FF_PSEUDOPAL)) {
         context->palette = av_buffer_alloc(AVPALETTE_SIZE);
         if (!context->palette)
             return AVERROR(ENOMEM);
-        memset(context->palette->data, 0, AVPALETTE_SIZE);
-        if (avctx->bits_per_coded_sample == 1)
-            memset(context->palette->data, 0xff, 4);
+#if FF_API_PSEUDOPAL
+        if (desc->flags & AV_PIX_FMT_FLAG_PSEUDOPAL)
+            avpriv_set_systematic_pal2((uint32_t*)context->palette->data, avctx->pix_fmt);
+#endif
+        else {
+            memset(context->palette->data, 0, AVPALETTE_SIZE);
+            if (avctx->bits_per_coded_sample == 1)
+                memset(context->palette->data, 0xff, 4);
+        }
     }
 
     if ((avctx->extradata_size >= 9 &&
@@ -163,8 +168,8 @@ static void name(AVCodecContext *avctx, uint8_t * dst, const uint8_t *buf, int b
 MKSCALE16(scale16be, AV_RB16, AV_WB16)
 MKSCALE16(scale16le, AV_RL16, AV_WL16)
 
-static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
-                      int *got_frame, AVPacket *avpkt)
+static int raw_decode(AVCodecContext *avctx, void *data, int *got_frame,
+                      AVPacket *avpkt)
 {
     const AVPixFmtDescriptor *desc;
     RawVideoContext *context       = avctx->priv_data;
@@ -174,6 +179,8 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
     int stride;
     int res, len;
     int need_copy;
+
+    AVFrame   *frame   = data;
 
     if (avctx->width <= 0) {
         av_log(avctx, AV_LOG_ERROR, "width is not set\n");
@@ -227,16 +234,18 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
     need_copy = !avpkt->buf || context->is_1_2_4_8_bpp || context->is_yuv2 || context->is_lt_16bpp;
 
     frame->pict_type        = AV_PICTURE_TYPE_I;
-    frame->flags |= AV_FRAME_FLAG_KEY;
+    frame->key_frame        = 1;
 
     res = ff_decode_frame_props(avctx, frame);
     if (res < 0)
         return res;
 
+    frame->pkt_pos      = avctx->internal->last_pkt_props->pos;
+    frame->pkt_duration = avctx->internal->last_pkt_props->duration;
+
     if (context->tff >= 0) {
-        frame->flags |= AV_FRAME_FLAG_INTERLACED;
-        if (context->tff == 1)
-            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+        frame->interlaced_frame = 1;
+        frame->top_field_first  = context->tff;
     }
 
     if ((res = av_image_check_size(avctx->width, avctx->height, 0, avctx)) < 0)
@@ -358,7 +367,15 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
     }
 
     if (avctx->pix_fmt == AV_PIX_FMT_PAL8) {
+        buffer_size_t pal_size;
+        const uint8_t *pal = av_packet_get_side_data(avpkt, AV_PKT_DATA_PALETTE,
+                                                     &pal_size);
         int ret;
+
+        if (pal && pal_size != AVPALETTE_SIZE) {
+            av_log(avctx, AV_LOG_ERROR, "Palette size %d is wrong\n", pal_size);
+            pal = NULL;
+        }
 
         if (!context->palette)
             context->palette = av_buffer_alloc(AVPALETTE_SIZE);
@@ -372,24 +389,17 @@ static int raw_decode(AVCodecContext *avctx, AVFrame *frame,
             return ret;
         }
 
-        if (ff_copy_palette(context->palette->data, avpkt, avctx)) {
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
+        if (pal) {
+            memcpy(context->palette->data, pal, AVPALETTE_SIZE);
             frame->palette_has_changed = 1;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
         } else if (context->is_nut_pal8) {
             int vid_size = avctx->width * avctx->height;
             int pal_size = avpkt->size - vid_size;
 
             if (avpkt->size > vid_size && pal_size <= AVPALETTE_SIZE) {
-                const uint8_t *pal = avpkt->data + vid_size;
+                pal = avpkt->data + vid_size;
                 memcpy(context->palette->data, pal, pal_size);
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
                 frame->palette_has_changed = 1;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
             }
         }
     }
@@ -415,7 +425,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
         frame->linesize[1] = FFALIGN(frame->linesize[1], linesize_align);
     }
 
-    if (avctx->pix_fmt == AV_PIX_FMT_PAL8 && buf_size < context->frame_size) {
+    if ((avctx->pix_fmt == AV_PIX_FMT_PAL8 && buf_size < context->frame_size) ||
+        (desc->flags & FF_PSEUDOPAL)) {
         frame->buf[1]  = av_buffer_ref(context->palette);
         if (!frame->buf[1]) {
             av_buffer_unref(&frame->buf[0]);
@@ -468,9 +479,9 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     if (avctx->field_order > AV_FIELD_PROGRESSIVE) { /* we have interlaced material flagged in container */
-        frame->flags |= AV_FRAME_FLAG_INTERLACED;
+        frame->interlaced_frame = 1;
         if (avctx->field_order == AV_FIELD_TT || avctx->field_order == AV_FIELD_TB)
-            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+            frame->top_field_first = 1;
     }
 
     *got_frame = 1;
@@ -486,15 +497,15 @@ static av_cold int raw_close_decoder(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_rawvideo_decoder = {
-    .p.name         = "rawvideo",
-    CODEC_LONG_NAME("raw video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_RAWVIDEO,
+AVCodec ff_rawvideo_decoder = {
+    .name           = "rawvideo",
+    .long_name      = NULL_IF_CONFIG_SMALL("raw video"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_RAWVIDEO,
     .priv_data_size = sizeof(RawVideoContext),
     .init           = raw_init_decoder,
     .close          = raw_close_decoder,
-    FF_CODEC_DECODE_CB(raw_decode),
-    .p.priv_class   = &rawdec_class,
-    .p.capabilities = AV_CODEC_CAP_PARAM_CHANGE,
+    .decode         = raw_decode,
+    .priv_class     = &rawdec_class,
+    .capabilities   = AV_CODEC_CAP_PARAM_CHANGE,
 };

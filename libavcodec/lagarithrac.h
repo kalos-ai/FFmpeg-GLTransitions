@@ -31,11 +31,13 @@
 #define AVCODEC_LAGARITHRAC_H
 
 #include <stdint.h>
+#include "libavutil/common.h"
 #include "libavutil/intreadwrite.h"
+#include "avcodec.h"
 #include "get_bits.h"
 
 typedef struct lag_rac {
-    void    *logctx;
+    AVCodecContext *avctx;
     unsigned low;
     unsigned range;
     unsigned scale;             /**< Number of bits of precision in range. */

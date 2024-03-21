@@ -27,7 +27,7 @@
  * project, and ported by Arwa Arif for FFmpeg.
  */
 
-#include "libavutil/emms.h"
+#include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
@@ -35,7 +35,6 @@
 #include "internal.h"
 #include "qp_table.h"
 #include "vf_pp7.h"
-#include "video.h"
 
 enum mode {
     MODE_HARD,
@@ -47,10 +46,10 @@ enum mode {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption pp7_options[] = {
     { "qp", "force a constant quantizer parameter", OFFSET(qp), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 64, FLAGS },
-    { "mode", "set thresholding mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_MEDIUM}, 0, 2, FLAGS, .unit = "mode" },
-        { "hard",   "hard thresholding",   0, AV_OPT_TYPE_CONST, {.i64 = MODE_HARD},   INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
-        { "soft",   "soft thresholding",   0, AV_OPT_TYPE_CONST, {.i64 = MODE_SOFT},   INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
-        { "medium", "medium thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_MEDIUM}, INT_MIN, INT_MAX, FLAGS, .unit = "mode" },
+    { "mode", "set thresholding mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_MEDIUM}, 0, 2, FLAGS, "mode" },
+        { "hard",   "hard thresholding",   0, AV_OPT_TYPE_CONST, {.i64 = MODE_HARD},   INT_MIN, INT_MAX, FLAGS, "mode" },
+        { "soft",   "soft thresholding",   0, AV_OPT_TYPE_CONST, {.i64 = MODE_SOFT},   INT_MIN, INT_MAX, FLAGS, "mode" },
+        { "medium", "medium thresholding", 0, AV_OPT_TYPE_CONST, {.i64 = MODE_MEDIUM}, INT_MIN, INT_MAX, FLAGS, "mode" },
     { NULL }
 };
 
@@ -266,15 +265,23 @@ static void filter(PP7Context *p, uint8_t *dst, uint8_t *src,
     }
 }
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV444P,  AV_PIX_FMT_YUV422P,
-    AV_PIX_FMT_YUV420P,  AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_YUV410P,  AV_PIX_FMT_YUV440P,
-    AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ422P,
-    AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ440P,
-    AV_PIX_FMT_GBRP,
-    AV_PIX_FMT_GRAY8,    AV_PIX_FMT_NONE
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV444P,  AV_PIX_FMT_YUV422P,
+        AV_PIX_FMT_YUV420P,  AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_YUV410P,  AV_PIX_FMT_YUV440P,
+        AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ422P,
+        AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ440P,
+        AV_PIX_FMT_GBRP,
+        AV_PIX_FMT_GRAY8,    AV_PIX_FMT_NONE
+    };
+
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
+}
 
 static int config_input(AVFilterLink *inlink)
 {
@@ -303,9 +310,8 @@ static int config_input(AVFilterLink *inlink)
 
     pp7->dctB = dctB_c;
 
-#if ARCH_X86
-    ff_pp7_init_x86(pp7);
-#endif
+    if (ARCH_X86)
+        ff_pp7_init_x86(pp7);
 
     return 0;
 }
@@ -385,16 +391,25 @@ static const AVFilterPad pp7_inputs[] = {
         .config_props = config_input,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_pp7 = {
+static const AVFilterPad pp7_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_pp7 = {
     .name            = "pp7",
     .description     = NULL_IF_CONFIG_SMALL("Apply Postprocessing 7 filter."),
     .priv_size       = sizeof(PP7Context),
     .uninit          = uninit,
-    FILTER_INPUTS(pp7_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .query_formats   = query_formats,
+    .inputs          = pp7_inputs,
+    .outputs         = pp7_outputs,
     .priv_class      = &pp7_class,
     .flags           = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL,
 };

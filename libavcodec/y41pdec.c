@@ -21,8 +21,7 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 static av_cold int y41p_decode_init(AVCodecContext *avctx)
 {
@@ -36,10 +35,11 @@ static av_cold int y41p_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int y41p_decode_frame(AVCodecContext *avctx, AVFrame *pic,
+static int y41p_decode_frame(AVCodecContext *avctx, void *data,
                              int *got_frame, AVPacket *avpkt)
 {
-    const uint8_t *src = avpkt->data;
+    AVFrame *pic = data;
+    uint8_t *src = avpkt->data;
     uint8_t *y, *u, *v;
     int i, j, ret;
 
@@ -51,7 +51,7 @@ static int y41p_decode_frame(AVCodecContext *avctx, AVFrame *pic,
     if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
         return ret;
 
-    pic->flags |= AV_FRAME_FLAG_KEY;
+    pic->key_frame = 1;
     pic->pict_type = AV_PICTURE_TYPE_I;
 
     for (i = avctx->height - 1; i >= 0 ; i--) {
@@ -81,12 +81,13 @@ static int y41p_decode_frame(AVCodecContext *avctx, AVFrame *pic,
     return avpkt->size;
 }
 
-const FFCodec ff_y41p_decoder = {
-    .p.name       = "y41p",
-    CODEC_LONG_NAME("Uncompressed YUV 4:1:1 12-bit"),
-    .p.type       = AVMEDIA_TYPE_VIDEO,
-    .p.id         = AV_CODEC_ID_Y41P,
+AVCodec ff_y41p_decoder = {
+    .name         = "y41p",
+    .long_name    = NULL_IF_CONFIG_SMALL("Uncompressed YUV 4:1:1 12-bit"),
+    .type         = AVMEDIA_TYPE_VIDEO,
+    .id           = AV_CODEC_ID_Y41P,
     .init         = y41p_decode_init,
-    FF_CODEC_DECODE_CB(y41p_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode       = y41p_decode_frame,
+    .capabilities = AV_CODEC_CAP_DR1,
+    .caps_internal = FF_CODEC_CAP_INIT_THREADSAFE,
 };

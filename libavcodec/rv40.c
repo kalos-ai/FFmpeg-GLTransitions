@@ -27,29 +27,32 @@
 #include "config.h"
 
 #include "libavutil/imgutils.h"
-#include "libavutil/thread.h"
 
 #include "avcodec.h"
-#include "codec_internal.h"
 #include "mpegutils.h"
 #include "mpegvideo.h"
-#include "mpegvideodec.h"
 #include "golomb.h"
 
 #include "rv34.h"
 #include "rv40vlc2.h"
 #include "rv40data.h"
 
-static VLCElem aic_top_vlc[23590];
-static const VLCElem *aic_mode1_vlc[AIC_MODE1_NUM], *aic_mode2_vlc[AIC_MODE2_NUM];
-static const VLCElem *ptype_vlc[NUM_PTYPE_VLCS],    *btype_vlc[NUM_BTYPE_VLCS];
+static VLC aic_top_vlc;
+static VLC aic_mode1_vlc[AIC_MODE1_NUM], aic_mode2_vlc[AIC_MODE2_NUM];
+static VLC ptype_vlc[NUM_PTYPE_VLCS], btype_vlc[NUM_BTYPE_VLCS];
 
-static av_cold const VLCElem *rv40_init_table(VLCInitState *state, int nb_bits,
-                                              int nb_codes, const uint8_t (*tab)[2])
+static av_cold void rv40_init_table(VLC *vlc, unsigned *offset, int nb_bits,
+                                    int nb_codes, const uint8_t (*tab)[2])
 {
-    return ff_vlc_init_tables_from_lengths(state, nb_bits, nb_codes,
-                                           &tab[0][1], 2, &tab[0][0], 2, 1,
-                                           0, 0);
+    static VLC_TYPE vlc_buf[11776][2];
+
+    vlc->table           = &vlc_buf[*offset];
+    vlc->table_allocated = 1 << nb_bits;
+    *offset             += 1 << nb_bits;
+
+    ff_init_vlc_from_lengths(vlc, nb_bits, nb_codes,
+                             &tab[0][1], 2, &tab[0][0], 2, 1,
+                             0, INIT_VLC_USE_NEW_STATIC, NULL);
 }
 
 /**
@@ -57,19 +60,18 @@ static av_cold const VLCElem *rv40_init_table(VLCInitState *state, int nb_bits,
  */
 static av_cold void rv40_init_tables(void)
 {
-    VLCInitState state = VLC_INIT_STATE(aic_top_vlc);
-    int i;
+    int i, offset = 0;
+    static VLC_TYPE aic_mode2_table[11814][2];
 
-    rv40_init_table(&state, AIC_TOP_BITS, AIC_TOP_SIZE,
+    rv40_init_table(&aic_top_vlc, &offset, AIC_TOP_BITS, AIC_TOP_SIZE,
                     rv40_aic_top_vlc_tab);
     for(i = 0; i < AIC_MODE1_NUM; i++){
         // Every tenth VLC table is empty
         if((i % 10) == 9) continue;
-        aic_mode1_vlc[i] =
-            rv40_init_table(&state, AIC_MODE1_BITS,
-                            AIC_MODE1_SIZE, aic_mode1_vlc_tabs[i]);
+        rv40_init_table(&aic_mode1_vlc[i], &offset, AIC_MODE1_BITS,
+                        AIC_MODE1_SIZE, aic_mode1_vlc_tabs[i]);
     }
-    for (unsigned i = 0; i < AIC_MODE2_NUM; i++){
+    for (unsigned i = 0, offset = 0; i < AIC_MODE2_NUM; i++){
         uint16_t syms[AIC_MODE2_SIZE];
 
         for (int j = 0; j < AIC_MODE2_SIZE; j++) {
@@ -80,20 +82,20 @@ static av_cold void rv40_init_tables(void)
             else
                 syms[j] = first | (second << 8);
         }
-        aic_mode2_vlc[i] =
-            ff_vlc_init_tables_from_lengths(&state, AIC_MODE2_BITS, AIC_MODE2_SIZE,
-                                            aic_mode2_vlc_bits[i], 1,
-                                            syms, 2, 2, 0, 0);
+        aic_mode2_vlc[i].table           = &aic_mode2_table[offset];
+        aic_mode2_vlc[i].table_allocated = FF_ARRAY_ELEMS(aic_mode2_table) - offset;
+        ff_init_vlc_from_lengths(&aic_mode2_vlc[i], AIC_MODE2_BITS, AIC_MODE2_SIZE,
+                                 aic_mode2_vlc_bits[i], 1,
+                                 syms, 2, 2, 0, INIT_VLC_STATIC_OVERLONG, NULL);
+        offset += aic_mode2_vlc[i].table_size;
     }
     for(i = 0; i < NUM_PTYPE_VLCS; i++){
-        ptype_vlc[i] =
-            rv40_init_table(&state, PTYPE_VLC_BITS, PTYPE_VLC_SIZE,
-                            ptype_vlc_tabs[i]);
+        rv40_init_table(&ptype_vlc[i], &offset, PTYPE_VLC_BITS, PTYPE_VLC_SIZE,
+                        ptype_vlc_tabs[i]);
     }
     for(i = 0; i < NUM_BTYPE_VLCS; i++){
-        btype_vlc[i] =
-            rv40_init_table(&state, BTYPE_VLC_BITS, BTYPE_VLC_SIZE,
-                            btype_vlc_tabs[i]);
+        rv40_init_table(&btype_vlc[i], &offset, BTYPE_VLC_BITS, BTYPE_VLC_SIZE,
+                        btype_vlc_tabs[i]);
     }
 }
 
@@ -173,7 +175,7 @@ static int rv40_decode_intra_types(RV34DecContext *r, GetBitContext *gb, int8_t 
 
     for(i = 0; i < 4; i++, dst += r->intra_types_stride){
         if(!i && s->first_slice_line){
-            pattern = get_vlc2(gb, aic_top_vlc, AIC_TOP_BITS, 1);
+            pattern = get_vlc2(gb, aic_top_vlc.table, AIC_TOP_BITS, 1);
             dst[0] = (pattern >> 2) & 2;
             dst[1] = (pattern >> 1) & 2;
             dst[2] =  pattern       & 2;
@@ -196,12 +198,12 @@ static int rv40_decode_intra_types(RV34DecContext *r, GetBitContext *gb, int8_t 
                 if(pattern == rv40_aic_table_index[k])
                     break;
             if(j < 3 && k < MODE2_PATTERNS_NUM){ //pattern is found, decoding 2 coefficients
-                AV_WN16(ptr, get_vlc2(gb, aic_mode2_vlc[k], AIC_MODE2_BITS, 2));
+                AV_WN16(ptr, get_vlc2(gb, aic_mode2_vlc[k].table, AIC_MODE2_BITS, 2));
                 ptr += 2;
                 j++;
             }else{
                 if(B != -1 && C != -1)
-                    v = get_vlc2(gb, aic_mode1_vlc[B + C*10], AIC_MODE1_BITS, 1);
+                    v = get_vlc2(gb, aic_mode1_vlc[B + C*10].table, AIC_MODE1_BITS, 1);
                 else{ // tricky decoding
                     v = 0;
                     switch(C){
@@ -265,17 +267,17 @@ static int rv40_decode_mb_info(RV34DecContext *r)
 
     if(s->pict_type == AV_PICTURE_TYPE_P){
         prev_type = block_num_to_ptype_vlc_num[prev_type];
-        q = get_vlc2(gb, ptype_vlc[prev_type], PTYPE_VLC_BITS, 1);
+        q = get_vlc2(gb, ptype_vlc[prev_type].table, PTYPE_VLC_BITS, 1);
         if(q < PBTYPE_ESCAPE)
             return q;
-        q = get_vlc2(gb, ptype_vlc[prev_type], PTYPE_VLC_BITS, 1);
+        q = get_vlc2(gb, ptype_vlc[prev_type].table, PTYPE_VLC_BITS, 1);
         av_log(s->avctx, AV_LOG_ERROR, "Dquant for P-frame\n");
     }else{
         prev_type = block_num_to_btype_vlc_num[prev_type];
-        q = get_vlc2(gb, btype_vlc[prev_type], BTYPE_VLC_BITS, 1);
+        q = get_vlc2(gb, btype_vlc[prev_type].table, BTYPE_VLC_BITS, 1);
         if(q < PBTYPE_ESCAPE)
             return q;
-        q = get_vlc2(gb, btype_vlc[prev_type], BTYPE_VLC_BITS, 1);
+        q = get_vlc2(gb, btype_vlc[prev_type].table, BTYPE_VLC_BITS, 1);
         av_log(s->avctx, AV_LOG_ERROR, "Dquant for B-frame\n");
     }
     return 0;
@@ -551,36 +553,39 @@ static void rv40_loop_filter(RV34DecContext *r, int row)
  */
 static av_cold int rv40_decode_init(AVCodecContext *avctx)
 {
-    static AVOnce init_static_once = AV_ONCE_INIT;
     RV34DecContext *r = avctx->priv_data;
     int ret;
 
     r->rv30 = 0;
     if ((ret = ff_rv34_decode_init(avctx)) < 0)
         return ret;
+    if(!aic_top_vlc.bits)
+        rv40_init_tables();
     r->parse_slice_header = rv40_parse_slice_header;
     r->decode_intra_types = rv40_decode_intra_types;
     r->decode_mb_info     = rv40_decode_mb_info;
     r->loop_filter        = rv40_loop_filter;
     r->luma_dc_quant_i = rv40_luma_dc_quant[0];
     r->luma_dc_quant_p = rv40_luma_dc_quant[1];
-    ff_rv40dsp_init(&r->rdsp);
-    ff_thread_once(&init_static_once, rv40_init_tables);
     return 0;
 }
 
-const FFCodec ff_rv40_decoder = {
-    .p.name                = "rv40",
-    CODEC_LONG_NAME("RealVideo 4.0"),
-    .p.type                = AVMEDIA_TYPE_VIDEO,
-    .p.id                  = AV_CODEC_ID_RV40,
+AVCodec ff_rv40_decoder = {
+    .name                  = "rv40",
+    .long_name             = NULL_IF_CONFIG_SMALL("RealVideo 4.0"),
+    .type                  = AVMEDIA_TYPE_VIDEO,
+    .id                    = AV_CODEC_ID_RV40,
     .priv_data_size        = sizeof(RV34DecContext),
     .init                  = rv40_decode_init,
     .close                 = ff_rv34_decode_end,
-    FF_CODEC_DECODE_CB(ff_rv34_decode_frame),
-    .p.capabilities        = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
+    .decode                = ff_rv34_decode_frame,
+    .capabilities          = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
                              AV_CODEC_CAP_FRAME_THREADS,
     .flush                 = ff_mpeg_flush,
-    UPDATE_THREAD_CONTEXT(ff_rv34_decode_update_thread_context),
+    .pix_fmts              = (const enum AVPixelFormat[]) {
+        AV_PIX_FMT_YUV420P,
+        AV_PIX_FMT_NONE
+    },
+    .update_thread_context = ONLY_IF_THREADS_ENABLED(ff_rv34_decode_update_thread_context),
     .caps_internal         = FF_CODEC_CAP_ALLOCATE_PROGRESS,
 };

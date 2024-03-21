@@ -20,10 +20,11 @@
 
 #include "libavutil/attributes.h"
 #include "libavutil/common.h"
+#include "libavutil/avassert.h"
 
 #include "cfhdencdsp.h"
 
-static av_always_inline void filter(const int16_t *input, ptrdiff_t in_stride,
+static av_always_inline void filter(int16_t *input, ptrdiff_t in_stride,
                           int16_t *low, ptrdiff_t low_stride,
                           int16_t *high, ptrdiff_t high_stride,
                           int len)
@@ -46,7 +47,7 @@ static av_always_inline void filter(const int16_t *input, ptrdiff_t in_stride,
                                                       1 * input[((len-2)-3)*in_stride] + 1 * input[((len-2)-4)*in_stride] + 4) >> 3);
 }
 
-static void horiz_filter(const int16_t *input, int16_t *low, int16_t *high,
+static void horiz_filter(int16_t *input, int16_t *low, int16_t *high,
                          ptrdiff_t in_stride, ptrdiff_t low_stride,
                          ptrdiff_t high_stride,
                          int width, int height)
@@ -59,7 +60,7 @@ static void horiz_filter(const int16_t *input, int16_t *low, int16_t *high,
     }
 }
 
-static void vert_filter(const int16_t *input, int16_t *low, int16_t *high,
+static void vert_filter(int16_t *input, int16_t *low, int16_t *high,
                         ptrdiff_t in_stride, ptrdiff_t low_stride,
                         ptrdiff_t high_stride,
                         int width, int height)
@@ -73,7 +74,6 @@ av_cold void ff_cfhdencdsp_init(CFHDEncDSPContext *c)
     c->horiz_filter = horiz_filter;
     c->vert_filter = vert_filter;
 
-#if ARCH_X86
-    ff_cfhdencdsp_init_x86(c);
-#endif
+    if (ARCH_X86)
+        ff_cfhdencdsp_init_x86(c);
 }

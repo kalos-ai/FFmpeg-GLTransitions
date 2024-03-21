@@ -27,7 +27,6 @@
  */
 
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "subtitles.h"
 #include "libavutil/opt.h"
@@ -75,19 +74,18 @@ static int aqt_read_header(AVFormatContext *s)
             new_event = 1;
             pos = avio_tell(s->pb);
             if (sub) {
-                if (frame >= sub->pts && (uint64_t)frame - sub->pts < INT64_MAX)
-                    sub->duration = frame - sub->pts;
+                sub->duration = frame - sub->pts;
                 sub = NULL;
             }
         } else if (*line) {
             if (!new_event) {
                 sub = ff_subtitles_queue_insert(&aqt->q, "\n", 1, 1);
                 if (!sub)
-                    return AVERROR(ENOMEM);
+                    goto fail;
             }
             sub = ff_subtitles_queue_insert(&aqt->q, line, strlen(line), !new_event);
             if (!sub)
-                return AVERROR(ENOMEM);
+                goto fail;
             if (new_event) {
                 sub->pts = frame;
                 sub->duration = -1;
@@ -99,6 +97,9 @@ static int aqt_read_header(AVFormatContext *s)
 
     ff_subtitles_queue_finalize(s, &aqt->q);
     return 0;
+fail:
+    ff_subtitles_queue_clean(&aqt->q);
+    return AVERROR(ENOMEM);
 }
 
 static int aqt_read_packet(AVFormatContext *s, AVPacket *pkt)
@@ -136,16 +137,15 @@ static const AVClass aqt_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFInputFormat ff_aqtitle_demuxer = {
-    .p.name         = "aqtitle",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("AQTitle subtitles"),
-    .p.extensions   = "aqt",
-    .p.priv_class   = &aqt_class,
+AVInputFormat ff_aqtitle_demuxer = {
+    .name           = "aqtitle",
+    .long_name      = NULL_IF_CONFIG_SMALL("AQTitle subtitles"),
     .priv_data_size = sizeof(AQTitleContext),
-    .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = aqt_probe,
     .read_header    = aqt_read_header,
     .read_packet    = aqt_read_packet,
     .read_seek2     = aqt_read_seek,
     .read_close     = aqt_read_close,
+    .extensions     = "aqt",
+    .priv_class     = &aqt_class,
 };

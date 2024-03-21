@@ -19,7 +19,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "libavutil/error.h"
 #include "libavutil/lfg.h"
 #include "libavutil/log.h"
 

@@ -21,7 +21,7 @@
 #include "libavutil/intreadwrite.h"
 
 #include "avcodec.h"
-#include "codec_internal.h"
+#include "internal.h"
 
 typedef struct IMM5Context {
     AVCodecContext *h264_avctx;   // wrapper context for H264
@@ -83,10 +83,11 @@ static av_cold int imm5_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int imm5_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int imm5_decode_frame(AVCodecContext *avctx, void *data,
                              int *got_frame, AVPacket *avpkt)
 {
     IMM5Context *ctx = avctx->priv_data;
+    AVFrame *frame = data;
     AVCodecContext *codec_avctx = ctx->h264_avctx;
     int ret;
 
@@ -177,15 +178,16 @@ static av_cold int imm5_close(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_imm5_decoder = {
-    .p.name         = "imm5",
-    CODEC_LONG_NAME("Infinity IMM5"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_IMM5,
+AVCodec ff_imm5_decoder = {
+    .name           = "imm5",
+    .long_name      = NULL_IF_CONFIG_SMALL("Infinity IMM5"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_IMM5,
     .init           = imm5_init,
-    FF_CODEC_DECODE_CB(imm5_decode_frame),
+    .decode         = imm5_decode_frame,
     .close          = imm5_close,
     .flush          = imm5_flush,
     .priv_data_size = sizeof(IMM5Context),
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE |
+                      FF_CODEC_CAP_INIT_CLEANUP,
 };

@@ -20,7 +20,6 @@
  */
 
 #include "config.h"
-#include "config_components.h"
 #include "voc.h"
 #include "internal.h"
 

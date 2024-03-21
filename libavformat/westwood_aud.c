@@ -36,7 +36,6 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 #define AUD_HEADER_SIZE 12
@@ -119,7 +118,9 @@ static int wsaud_read_header(AVFormatContext *s)
     }
     avpriv_set_pts_info(st, 64, 1, sample_rate);
     st->codecpar->codec_type  = AVMEDIA_TYPE_AUDIO;
-    av_channel_layout_default(&st->codecpar->ch_layout, channels);
+    st->codecpar->channels    = channels;
+    st->codecpar->channel_layout = channels == 1 ? AV_CH_LAYOUT_MONO :
+                                                   AV_CH_LAYOUT_STEREO;
     st->codecpar->sample_rate = sample_rate;
 
     return 0;
@@ -163,23 +164,23 @@ static int wsaud_read_packet(AVFormatContext *s,
         if (ret != chunk_size)
             return AVERROR(EIO);
 
-        if (st->codecpar->ch_layout.nb_channels <= 0) {
+        if (st->codecpar->channels <= 0) {
             av_log(s, AV_LOG_ERROR, "invalid number of channels %d\n",
-                   st->codecpar->ch_layout.nb_channels);
+                   st->codecpar->channels);
             return AVERROR_INVALIDDATA;
         }
 
         /* 2 samples/byte, 1 or 2 samples per frame depending on stereo */
-        pkt->duration = (chunk_size * 2) / st->codecpar->ch_layout.nb_channels;
+        pkt->duration = (chunk_size * 2) / st->codecpar->channels;
     }
     pkt->stream_index = st->index;
 
     return ret;
 }
 
-const FFInputFormat ff_wsaud_demuxer = {
-    .p.name         = "wsaud",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Westwood Studios audio"),
+AVInputFormat ff_wsaud_demuxer = {
+    .name           = "wsaud",
+    .long_name      = NULL_IF_CONFIG_SMALL("Westwood Studios audio"),
     .read_probe     = wsaud_probe,
     .read_header    = wsaud_read_header,
     .read_packet    = wsaud_read_packet,

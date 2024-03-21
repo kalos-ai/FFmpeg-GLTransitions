@@ -17,8 +17,9 @@
  */
 
 #include "libavutil/opt.h"
-#include "libavutil/pixdesc.h"
+#include "libavutil/imgutils.h"
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
 #include "video.h"
 
@@ -52,7 +53,7 @@ static int colorizey_slice8(AVFilterContext *ctx, void *arg, int jobnr, int nb_j
     const int height = s->planeheight[0];
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t ylinesize = frame->linesize[0];
+    const int ylinesize = frame->linesize[0];
     uint8_t *yptr = frame->data[0] + slice_start * ylinesize;
     const int yv = s->c[0];
     const float mix = s->mix;
@@ -75,7 +76,7 @@ static int colorizey_slice16(AVFilterContext *ctx, void *arg, int jobnr, int nb_
     const int height = s->planeheight[0];
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t ylinesize = frame->linesize[0] / 2;
+    const int ylinesize = frame->linesize[0] / 2;
     uint16_t *yptr = (uint16_t *)frame->data[0] + slice_start * ylinesize;
     const int yv = s->c[0];
     const float mix = s->mix;
@@ -98,8 +99,8 @@ static int colorize_slice8(AVFilterContext *ctx, void *arg, int jobnr, int nb_jo
     const int height = s->planeheight[1];
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t ulinesize = frame->linesize[1];
-    const ptrdiff_t vlinesize = frame->linesize[2];
+    const int ulinesize = frame->linesize[1];
+    const int vlinesize = frame->linesize[2];
     uint8_t *uptr = frame->data[1] + slice_start * ulinesize;
     uint8_t *vptr = frame->data[2] + slice_start * vlinesize;
     const int u = s->c[1];
@@ -126,8 +127,8 @@ static int colorize_slice16(AVFilterContext *ctx, void *arg, int jobnr, int nb_j
     const int height = s->planeheight[1];
     const int slice_start = (height * jobnr) / nb_jobs;
     const int slice_end = (height * (jobnr + 1)) / nb_jobs;
-    const ptrdiff_t ulinesize = frame->linesize[1] / 2;
-    const ptrdiff_t vlinesize = frame->linesize[2] / 2;
+    const int ulinesize = frame->linesize[1] / 2;
+    const int vlinesize = frame->linesize[2] / 2;
     uint16_t *uptr = (uint16_t *)frame->data[1] + slice_start * ulinesize;
     uint16_t *vptr = (uint16_t *)frame->data[2] + slice_start * vlinesize;
     const int u = s->c[1];
@@ -202,32 +203,43 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     hsl2rgb(s->hue, s->saturation, s->lightness, &c[0], &c[1], &c[2]);
     rgb2yuv(c[0], c[1], c[2], &s->c[0], &s->c[1], &s->c[2], s->depth);
 
-    ff_filter_execute(ctx, do_slice, frame, NULL,
-                      FFMIN(s->planeheight[1], ff_filter_get_nb_threads(ctx)));
+    ctx->internal->execute(ctx, do_slice, frame, NULL,
+                           FFMIN(s->planeheight[1], ff_filter_get_nb_threads(ctx)));
 
     return ff_filter_frame(ctx->outputs[0], frame);
 }
 
-static const enum AVPixelFormat pixel_fmts[] = {
-    AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
-    AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
-    AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P,
-    AV_PIX_FMT_YUVJ440P, AV_PIX_FMT_YUVJ444P,
-    AV_PIX_FMT_YUVJ411P,
-    AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
-    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
-    AV_PIX_FMT_YUV440P10,
-    AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
-    AV_PIX_FMT_YUV440P12,
-    AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
-    AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
-    AV_PIX_FMT_YUVA420P,  AV_PIX_FMT_YUVA422P,   AV_PIX_FMT_YUVA444P,
-    AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
-    AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
-    AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
-    AV_PIX_FMT_NONE
-};
+static av_cold int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pixel_fmts[] = {
+        AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
+        AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
+        AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P,
+        AV_PIX_FMT_YUVJ440P, AV_PIX_FMT_YUVJ444P,
+        AV_PIX_FMT_YUVJ411P,
+        AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
+        AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
+        AV_PIX_FMT_YUV440P10,
+        AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
+        AV_PIX_FMT_YUV440P12,
+        AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
+        AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
+        AV_PIX_FMT_YUVA420P,  AV_PIX_FMT_YUVA422P,   AV_PIX_FMT_YUVA444P,
+        AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
+        AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
+        AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
+        AV_PIX_FMT_NONE
+    };
+
+    AVFilterFormats *formats = NULL;
+
+    formats = ff_make_format_list(pixel_fmts);
+    if (!formats)
+        return AVERROR(ENOMEM);
+
+    return ff_set_common_formats(ctx, formats);
+}
 
 static av_cold int config_input(AVFilterLink *inlink)
 {
@@ -253,10 +265,19 @@ static const AVFilterPad colorize_inputs[] = {
     {
         .name           = "default",
         .type           = AVMEDIA_TYPE_VIDEO,
-        .flags          = AVFILTERPAD_FLAG_NEEDS_WRITABLE,
+        .needs_writable = 1,
         .filter_frame   = filter_frame,
         .config_props   = config_input,
     },
+    { NULL }
+};
+
+static const AVFilterPad colorize_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
 };
 
 #define OFFSET(x) offsetof(ColorizeContext, x)
@@ -272,14 +293,14 @@ static const AVOption colorize_options[] = {
 
 AVFILTER_DEFINE_CLASS(colorize);
 
-const AVFilter ff_vf_colorize = {
+AVFilter ff_vf_colorize = {
     .name          = "colorize",
     .description   = NULL_IF_CONFIG_SMALL("Overlay a solid color on the video stream."),
     .priv_size     = sizeof(ColorizeContext),
     .priv_class    = &colorize_class,
-    FILTER_INPUTS(colorize_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pixel_fmts),
+    .query_formats = query_formats,
+    .inputs        = colorize_inputs,
+    .outputs       = colorize_outputs,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC | AVFILTER_FLAG_SLICE_THREADS,
     .process_command = ff_filter_process_command,
 };

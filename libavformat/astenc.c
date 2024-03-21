@@ -23,7 +23,6 @@
 #include "avio_internal.h"
 #include "internal.h"
 #include "ast.h"
-#include "mux.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
 
@@ -85,7 +84,7 @@ static int ast_write_header(AVFormatContext *s)
     avio_wb32(pb, 0); /* File size minus header */
     avio_wb16(pb, codec_tag);
     avio_wb16(pb, 16); /* Bit depth */
-    avio_wb16(pb, par->ch_layout.nb_channels);
+    avio_wb16(pb, par->channels);
     avio_wb16(pb, 0); /* Loop flag */
     avio_wb32(pb, par->sample_rate);
 
@@ -110,7 +109,7 @@ static int ast_write_packet(AVFormatContext *s, AVPacket *pkt)
     AVIOContext *pb = s->pb;
     ASTMuxContext *ast = s->priv_data;
     AVCodecParameters *par = s->streams[0]->codecpar;
-    int size = pkt->size / par->ch_layout.nb_channels;
+    int size = pkt->size / par->channels;
 
     if (s->streams[0]->nb_frames == 0)
         ast->fbs = size;
@@ -119,7 +118,9 @@ static int ast_write_packet(AVFormatContext *s, AVPacket *pkt)
     avio_wb32(pb, size); /* Block size */
 
     /* padding */
-    ffio_fill(pb, 0, 24);
+    avio_wb64(pb, 0);
+    avio_wb64(pb, 0);
+    avio_wb64(pb, 0);
 
     avio_write(pb, pkt->data, pkt->size);
 
@@ -143,16 +144,14 @@ static int ast_write_trailer(AVFormatContext *s)
 
         /* Loopstart if provided */
         if (ast->loopstart > 0) {
-            if (ast->loopstart >= samples) {
-                av_log(s, AV_LOG_WARNING, "Loopstart value is out of range and will be ignored\n");
-                ast->loopstart = -1;
-                avio_skip(pb, 4);
-            } else {
-                avio_wb32(pb, ast->loopstart);
-            }
-        } else {
+        if (ast->loopstart >= samples) {
+            av_log(s, AV_LOG_WARNING, "Loopstart value is out of range and will be ignored\n");
+            ast->loopstart = -1;
             avio_skip(pb, 4);
-        }
+        } else
+        avio_wb32(pb, ast->loopstart);
+        } else
+            avio_skip(pb, 4);
 
         /* Loopend if provided. Otherwise number of samples again */
         if (ast->loopend && ast->loopstart >= 0) {
@@ -197,16 +196,16 @@ static const AVClass ast_muxer_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFOutputFormat ff_ast_muxer = {
-    .p.name            = "ast",
-    .p.long_name       = NULL_IF_CONFIG_SMALL("AST (Audio Stream)"),
-    .p.extensions      = "ast",
+AVOutputFormat ff_ast_muxer = {
+    .name              = "ast",
+    .long_name         = NULL_IF_CONFIG_SMALL("AST (Audio Stream)"),
+    .extensions        = "ast",
     .priv_data_size    = sizeof(ASTMuxContext),
-    .p.audio_codec     = AV_CODEC_ID_PCM_S16BE_PLANAR,
-    .p.video_codec     = AV_CODEC_ID_NONE,
+    .audio_codec       = AV_CODEC_ID_PCM_S16BE_PLANAR,
+    .video_codec       = AV_CODEC_ID_NONE,
     .write_header      = ast_write_header,
     .write_packet      = ast_write_packet,
     .write_trailer     = ast_write_trailer,
-    .p.priv_class      = &ast_muxer_class,
-    .p.codec_tag       = ff_ast_codec_tags_list,
+    .priv_class        = &ast_muxer_class,
+    .codec_tag         = ff_ast_codec_tags_list,
 };

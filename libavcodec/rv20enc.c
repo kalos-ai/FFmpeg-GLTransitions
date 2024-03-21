@@ -25,21 +25,19 @@
  * RV20 encoder
  */
 
-#include "codec_internal.h"
 #include "mpegvideo.h"
 #include "mpegvideodata.h"
-#include "mpegvideoenc.h"
+#include "h263.h"
 #include "h263data.h"
-#include "h263enc.h"
 #include "put_bits.h"
-#include "rv10enc.h"
+#include "rv10.h"
 
-void ff_rv20_encode_picture_header(MpegEncContext *s) {
+void ff_rv20_encode_picture_header(MpegEncContext *s, int picture_number){
     put_bits(&s->pb, 2, s->pict_type); //I 0 vs. 1 ?
     put_bits(&s->pb, 1, 0);     /* unknown bit */
     put_bits(&s->pb, 5, s->qscale);
 
-    put_sbits(&s->pb, 8, s->picture_number); //FIXME wrong, but correct is not known
+    put_sbits(&s->pb, 8, picture_number); //FIXME wrong, but correct is not known
     s->mb_x= s->mb_y= 0;
     ff_h263_encode_mba(s);
 
@@ -62,17 +60,23 @@ void ff_rv20_encode_picture_header(MpegEncContext *s) {
     }
 }
 
-const FFCodec ff_rv20_encoder = {
-    .p.name         = "rv20",
-    CODEC_LONG_NAME("RealVideo 2.0"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_RV20,
-    .p.priv_class   = &ff_mpv_enc_class,
-    .p.capabilities = AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+static const AVClass rv20_class = {
+    .class_name = "rv20 encoder",
+    .item_name  = av_default_item_name,
+    .option     = ff_mpv_generic_options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
+
+AVCodec ff_rv20_encoder = {
+    .name           = "rv20",
+    .long_name      = NULL_IF_CONFIG_SMALL("RealVideo 2.0"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_RV20,
     .priv_data_size = sizeof(MpegEncContext),
     .init           = ff_mpv_encode_init,
-    FF_CODEC_ENCODE_CB(ff_mpv_encode_picture),
+    .encode2        = ff_mpv_encode_picture,
     .close          = ff_mpv_encode_end,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
-    .p.pix_fmts     = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },
+    .pix_fmts       = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },
+    .priv_class     = &rv20_class,
 };

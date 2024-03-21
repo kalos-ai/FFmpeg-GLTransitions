@@ -26,13 +26,11 @@
  */
 
 #include "libavutil/thread.h"
-#include "libavutil/imgutils.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
 #include "jpegtables.h"
 #include "mss34dsp.h"
 #include "unary.h"
@@ -101,7 +99,7 @@ static VLC vec_entry_vlc[2];
 static av_cold void mss4_init_vlc(VLC *vlc, unsigned *offset,
                                   const uint8_t *lens, const uint8_t *syms)
 {
-    static VLCElem vlc_buf[2146];
+    static VLC_TYPE vlc_buf[2146][2];
     uint8_t  bits[MAX_ENTRIES];
     int i, j;
     int idx = 0;
@@ -115,9 +113,9 @@ static av_cold void mss4_init_vlc(VLC *vlc, unsigned *offset,
 
     vlc->table           = &vlc_buf[*offset];
     vlc->table_allocated = FF_ARRAY_ELEMS(vlc_buf) - *offset;
-    ff_vlc_init_from_lengths(vlc, FFMIN(bits[idx - 1], 9), idx,
+    ff_init_vlc_from_lengths(vlc, FFMIN(bits[idx - 1], 9), idx,
                              bits, 1, syms, 1, 1,
-                             0, VLC_INIT_STATIC_OVERLONG, NULL);
+                             0, INIT_VLC_STATIC_OVERLONG, NULL);
     *offset += vlc->table_size;
 }
 
@@ -126,10 +124,10 @@ static av_cold void mss4_init_vlcs(void)
     for (unsigned i = 0, offset = 0; i < 2; i++) {
         mss4_init_vlc(&dc_vlc[i], &offset, mss4_dc_vlc_lens[i], NULL);
         mss4_init_vlc(&ac_vlc[i], &offset,
-                      i ? ff_mjpeg_bits_ac_chrominance + 1
-                        : ff_mjpeg_bits_ac_luminance   + 1,
-                      i ? ff_mjpeg_val_ac_chrominance
-                        : ff_mjpeg_val_ac_luminance);
+                      i ? avpriv_mjpeg_bits_ac_chrominance + 1
+                        : avpriv_mjpeg_bits_ac_luminance   + 1,
+                      i ? avpriv_mjpeg_val_ac_chrominance
+                        : avpriv_mjpeg_val_ac_luminance);
         mss4_init_vlc(&vec_entry_vlc[i], &offset, mss4_vec_entry_vlc_lens[i],
                       mss4_vec_entry_vlc_syms[i]);
     }
@@ -156,10 +154,9 @@ static av_always_inline int get_coeff_bits(GetBitContext *gb, int nbits)
     return val;
 }
 
-static inline int get_coeff(GetBitContext *gb, const VLC *vlc,
-                            int nb_bits, int max_depth)
+static inline int get_coeff(GetBitContext *gb, VLC *vlc)
 {
-    int val = get_vlc2(gb, vlc->table, nb_bits, max_depth);
+    int val = get_vlc2(gb, vlc->table, vlc->bits, 2);
 
     return get_coeff_bits(gb, val);
 }
@@ -172,7 +169,7 @@ static int mss4_decode_dct(GetBitContext *gb, VLC *dc_vlc, VLC *ac_vlc,
 
     memset(block, 0, sizeof(*block) * 64);
 
-    dc = get_coeff(gb, dc_vlc, dc_vlc->bits, 2);
+    dc = get_coeff(gb, dc_vlc);
     // DC prediction is the same as in MSS3
     if (by) {
         if (bx) {
@@ -338,7 +335,7 @@ static int mss4_decode_image_block(MSS4Context *ctx, GetBitContext *gb,
     for (i = 0; i < 3; i++) {
         vec_len[i] = vec_len_syms[!!i][get_unary(gb, 0, 3)];
         for (j = 0; j < vec_len[i]; j++) {
-            vec[i][j]  = get_coeff(gb, &vec_entry_vlc[!!i], 5, 1);
+            vec[i][j]  = get_coeff(gb, &vec_entry_vlc[!!i]);
             vec[i][j] += ctx->prev_vec[i][j];
             ctx->prev_vec[i][j] = vec[i][j];
         }
@@ -446,8 +443,8 @@ static inline void mss4_update_dc_cache(MSS4Context *c, int mb_x)
     }
 }
 
-static int mss4_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
-                             int *got_frame, AVPacket *avpkt)
+static int mss4_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                             AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
@@ -479,9 +476,6 @@ static int mss4_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
                width, height);
         return AVERROR_INVALIDDATA;
     }
-    if (av_image_check_size2(width, height, avctx->max_pixels, AV_PIX_FMT_NONE, 0, avctx) < 0)
-        return AVERROR_INVALIDDATA;
-
     if (quality < 1 || quality > 100) {
         av_log(avctx, AV_LOG_ERROR, "Invalid quality setting %d\n", quality);
         return AVERROR_INVALIDDATA;
@@ -504,15 +498,12 @@ static int mss4_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
 
     if ((ret = ff_reget_buffer(avctx, c->pic, 0)) < 0)
         return ret;
-    if (frame_type == INTRA_FRAME)
-        c->pic->flags |= AV_FRAME_FLAG_KEY;
-    else
-        c->pic->flags &= ~AV_FRAME_FLAG_KEY;
+    c->pic->key_frame = (frame_type == INTRA_FRAME);
     c->pic->pict_type = (frame_type == INTRA_FRAME) ? AV_PICTURE_TYPE_I
                                                    : AV_PICTURE_TYPE_P;
     if (frame_type == SKIP_FRAME) {
         *got_frame      = 1;
-        if ((ret = av_frame_ref(rframe, c->pic)) < 0)
+        if ((ret = av_frame_ref(data, c->pic)) < 0)
             return ret;
 
         return buf_size;
@@ -567,7 +558,7 @@ static int mss4_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
         dst[2] += c->pic->linesize[2] * 16;
     }
 
-    if ((ret = av_frame_ref(rframe, c->pic)) < 0)
+    if ((ret = av_frame_ref(data, c->pic)) < 0)
         return ret;
 
     *got_frame      = 1;
@@ -613,15 +604,15 @@ static av_cold int mss4_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_mts2_decoder = {
-    .p.name         = "mts2",
-    CODEC_LONG_NAME("MS Expression Encoder Screen"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_MTS2,
+AVCodec ff_mts2_decoder = {
+    .name           = "mts2",
+    .long_name      = NULL_IF_CONFIG_SMALL("MS Expression Encoder Screen"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_MTS2,
     .priv_data_size = sizeof(MSS4Context),
     .init           = mss4_decode_init,
     .close          = mss4_decode_end,
-    FF_CODEC_DECODE_CB(mss4_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .decode         = mss4_decode_frame,
+    .capabilities   = AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_INIT_THREADSAFE,
 };

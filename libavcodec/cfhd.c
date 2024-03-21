@@ -26,13 +26,12 @@
 #include "libavutil/attributes.h"
 #include "libavutil/buffer.h"
 #include "libavutil/common.h"
+#include "libavutil/imgutils.h"
 #include "libavutil/intreadwrite.h"
-#include "libavutil/pixdesc.h"
+#include "libavutil/opt.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
 #include "internal.h"
 #include "thread.h"
@@ -291,13 +290,13 @@ static int alloc_buffers(AVCodecContext *avctx)
         if (s->transform_type == 0) {
             s->plane[i].idwt_size = FFALIGN(height, 8) * stride;
             s->plane[i].idwt_buf =
-                av_calloc(s->plane[i].idwt_size, sizeof(*s->plane[i].idwt_buf));
+                av_mallocz_array(s->plane[i].idwt_size, sizeof(*s->plane[i].idwt_buf));
             s->plane[i].idwt_tmp =
                 av_malloc_array(s->plane[i].idwt_size, sizeof(*s->plane[i].idwt_tmp));
         } else {
             s->plane[i].idwt_size = FFALIGN(height, 8) * stride * 2;
             s->plane[i].idwt_buf =
-                av_calloc(s->plane[i].idwt_size, sizeof(*s->plane[i].idwt_buf));
+                av_mallocz_array(s->plane[i].idwt_size, sizeof(*s->plane[i].idwt_buf));
             s->plane[i].idwt_tmp =
                 av_malloc_array(s->plane[i].idwt_size, sizeof(*s->plane[i].idwt_tmp));
         }
@@ -373,12 +372,14 @@ static int alloc_buffers(AVCodecContext *avctx)
     return 0;
 }
 
-static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
-                       int *got_frame, AVPacket *avpkt)
+static int cfhd_decode(AVCodecContext *avctx, void *data, int *got_frame,
+                       AVPacket *avpkt)
 {
     CFHDContext *s = avctx->priv_data;
     CFHDDSPContext *dsp = &s->dsp;
     GetByteContext gb;
+    ThreadFrame frame = { .f = data };
+    AVFrame *pic = data;
     int ret = 0, i, j, plane, got_buffer = 0;
     int16_t *coeff_data;
 
@@ -680,9 +681,10 @@ static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
                     return AVERROR_INVALIDDATA;
                 avctx->height = height;
             }
-            pic->width = pic->height = 0;
+            frame.f->width =
+            frame.f->height = 0;
 
-            if ((ret = ff_thread_get_buffer(avctx, pic, 0)) < 0)
+            if ((ret = ff_thread_get_buffer(avctx, &frame, 0)) < 0)
                 return ret;
 
             s->coded_width = 0;
@@ -690,9 +692,10 @@ static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
             s->coded_format = AV_PIX_FMT_NONE;
             got_buffer = 1;
         } else if (tag == FrameIndex && data == 1 && s->sample_type == 1 && s->frame_type == 2) {
-            pic->width = pic->height = 0;
+            frame.f->width =
+            frame.f->height = 0;
 
-            if ((ret = ff_thread_get_buffer(avctx, pic, 0)) < 0)
+            if ((ret = ff_thread_get_buffer(avctx, &frame, 0)) < 0)
                 return ret;
             s->coded_width = 0;
             s->coded_height = 0;
@@ -819,7 +822,7 @@ static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
                                    VLC_BITS, 3, 1);
 
                         /* escape */
-                        if (!run)
+                        if (level == 64)
                             break;
 
                         count += run;
@@ -835,7 +838,7 @@ static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
                             const uint16_t q = s->quantisation;
 
                             for (i = 0; i < run; i++) {
-                                *coeff_data |= coeff * 256U;
+                                *coeff_data |= coeff * 256;
                                 *coeff_data++ *= q;
                             }
                         } else {
@@ -850,7 +853,7 @@ static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
                                    VLC_BITS, 3, 1);
 
                         /* escape */
-                        if (!run)
+                        if (level == 255 && run == 2)
                             break;
 
                         count += run;
@@ -866,7 +869,7 @@ static int cfhd_decode(AVCodecContext *avctx, AVFrame *pic,
                             const uint16_t q = s->quantisation;
 
                             for (i = 0; i < run; i++) {
-                                *coeff_data |= coeff * 256U;
+                                *coeff_data |= coeff * 256;
                                 *coeff_data++ *= q;
                             }
                         } else {
@@ -1087,8 +1090,8 @@ finish:
                     dst  += dst_linesize;
                 }
             } else {
-                av_log(avctx, AV_LOG_DEBUG, "interlaced frame ? %d", !!(pic->flags & AV_FRAME_FLAG_INTERLACED));
-                pic->flags |= AV_FRAME_FLAG_INTERLACED;
+                av_log(avctx, AV_LOG_DEBUG, "interlaced frame ? %d", pic->interlaced_frame);
+                pic->interlaced_frame = 1;
                 low    = s->plane[plane].subband[0];
                 high   = s->plane[plane].subband[7];
                 output = s->plane[plane].l_h[6];
@@ -1284,7 +1287,7 @@ finish:
                     dst  += dst_linesize;
                 }
             } else {
-                pic->flags |= AV_FRAME_FLAG_INTERLACED;
+                pic->interlaced_frame = 1;
                 low    = s->plane[plane].l_h[7];
                 high   = s->plane[plane].subband[14];
                 output = s->plane[plane].l_h[6];
@@ -1404,6 +1407,9 @@ static av_cold int cfhd_close(AVCodecContext *avctx)
 
     free_buffers(s);
 
+    ff_free_vlc(&s->vlc_9);
+    ff_free_vlc(&s->vlc_18);
+
     return 0;
 }
 
@@ -1452,16 +1458,16 @@ static int update_thread_context(AVCodecContext *dst, const AVCodecContext *src)
 }
 #endif
 
-const FFCodec ff_cfhd_decoder = {
-    .p.name           = "cfhd",
-    CODEC_LONG_NAME("GoPro CineForm HD"),
-    .p.type           = AVMEDIA_TYPE_VIDEO,
-    .p.id             = AV_CODEC_ID_CFHD,
+AVCodec ff_cfhd_decoder = {
+    .name             = "cfhd",
+    .long_name        = NULL_IF_CONFIG_SMALL("GoPro CineForm HD"),
+    .type             = AVMEDIA_TYPE_VIDEO,
+    .id               = AV_CODEC_ID_CFHD,
     .priv_data_size   = sizeof(CFHDContext),
     .init             = cfhd_init,
     .close            = cfhd_close,
-    FF_CODEC_DECODE_CB(cfhd_decode),
-    UPDATE_THREAD_CONTEXT(update_thread_context),
-    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
-    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
+    .decode           = cfhd_decode,
+    .update_thread_context = ONLY_IF_THREADS_ENABLED(update_thread_context),
+    .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
+    .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP,
 };

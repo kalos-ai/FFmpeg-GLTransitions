@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/avassert.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
@@ -62,15 +63,15 @@ static const AVOption datascope_options[] = {
     { "s",    "set output size", OFFSET(ow),   AV_OPT_TYPE_IMAGE_SIZE, {.str="hd720"}, 0, 0, FLAGS },
     { "x",    "set x offset", OFFSET(x),    AV_OPT_TYPE_INT, {.i64=0}, 0, INT_MAX, FLAGSR },
     { "y",    "set y offset", OFFSET(y),    AV_OPT_TYPE_INT, {.i64=0}, 0, INT_MAX, FLAGSR },
-    { "mode", "set scope mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=0}, 0, 2, FLAGSR, .unit = "mode" },
-    {   "mono",   NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, .unit = "mode" },
-    {   "color",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, .unit = "mode" },
-    {   "color2", NULL, 0, AV_OPT_TYPE_CONST, {.i64=2}, 0, 0, FLAGSR, .unit = "mode" },
+    { "mode", "set scope mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=0}, 0, 2, FLAGSR, "mode" },
+    {   "mono",   NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, "mode" },
+    {   "color",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, "mode" },
+    {   "color2", NULL, 0, AV_OPT_TYPE_CONST, {.i64=2}, 0, 0, FLAGSR, "mode" },
     { "axis",    "draw column/row numbers", OFFSET(axis), AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGSR },
     { "opacity", "set background opacity", OFFSET(opacity), AV_OPT_TYPE_FLOAT, {.dbl=0.75}, 0, 1, FLAGSR },
-    { "format", "set display number format", OFFSET(dformat), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGSR, .unit = "format" },
-    {   "hex",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, .unit = "format" },
-    {   "dec",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, .unit = "format" },
+    { "format", "set display number format", OFFSET(dformat), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGSR, "format" },
+    {   "hex",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, FLAGSR, "format" },
+    {   "dec",  NULL, 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, FLAGSR, "format" },
     { "components", "set components to display", OFFSET(components), AV_OPT_TYPE_INT, {.i64=15}, 1, 15, FLAGSR },
     { NULL }
 };
@@ -322,7 +323,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         av_frame_free(&in);
         return AVERROR(ENOMEM);
     }
-    av_frame_copy_props(out, in);
+    out->pts = in->pts;
 
     ff_fill_rectangle(&s->draw, &s->black, out->data, out->linesize,
                       0, 0, outlink->w, outlink->h);
@@ -370,8 +371,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
 
     td.in = in; td.out = out, td.yoff = xmaxlen, td.xoff = ymaxlen, td.PP = PP;
-    ff_filter_execute(ctx, s->filter, &td, NULL,
-                      FFMIN(ff_filter_get_nb_threads(ctx), FFMAX(outlink->w / 20, 1)));
+    ctx->internal->execute(ctx, s->filter, &td, NULL, FFMIN(ff_filter_get_nb_threads(ctx), FFMAX(outlink->w / 20, 1)));
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
@@ -383,7 +383,7 @@ static int config_input(AVFilterLink *inlink)
     uint8_t alpha = s->opacity * 255;
 
     s->nb_planes = av_pix_fmt_count_planes(inlink->format);
-    ff_draw_init2(&s->draw, inlink->format, inlink->colorspace, inlink->color_range, 0);
+    ff_draw_init(&s->draw, inlink->format, 0);
     ff_draw_color(&s->draw, &s->white,  (uint8_t[]){ 255, 255, 255, 255} );
     ff_draw_color(&s->draw, &s->black,  (uint8_t[]){ 0, 0, 0, alpha} );
     ff_draw_color(&s->draw, &s->yellow, (uint8_t[]){ 255, 255, 0, 255} );
@@ -438,6 +438,7 @@ static const AVFilterPad inputs[] = {
         .filter_frame = filter_frame,
         .config_props = config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad outputs[] = {
@@ -446,16 +447,17 @@ static const AVFilterPad outputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_datascope = {
+AVFilter ff_vf_datascope = {
     .name          = "datascope",
     .description   = NULL_IF_CONFIG_SMALL("Video data analysis."),
     .priv_size     = sizeof(DatascopeContext),
     .priv_class    = &datascope_class,
-    FILTER_INPUTS(inputs),
-    FILTER_OUTPUTS(outputs),
-    FILTER_QUERY_FUNC(query_formats),
+    .query_formats = query_formats,
+    .inputs        = inputs,
+    .outputs       = outputs,
     .flags         = AVFILTER_FLAG_SLICE_THREADS,
     .process_command = process_command,
 };
@@ -726,16 +728,25 @@ static const AVFilterPad pixscope_inputs[] = {
         .filter_frame   = pixscope_filter_frame,
         .config_props   = pixscope_config_input,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_pixscope = {
+static const AVFilterPad pixscope_outputs[] = {
+    {
+        .name         = "default",
+        .type         = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_pixscope = {
     .name          = "pixscope",
     .description   = NULL_IF_CONFIG_SMALL("Pixel data analysis."),
     .priv_size     = sizeof(PixscopeContext),
     .priv_class    = &pixscope_class,
-    FILTER_INPUTS(pixscope_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
+    .query_formats = query_formats,
+    .inputs        = pixscope_inputs,
+    .outputs       = pixscope_outputs,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
     .process_command = pixscope_process_command,
 };
@@ -1119,21 +1130,30 @@ static const AVFilterPad oscilloscope_inputs[] = {
     {
         .name           = "default",
         .type           = AVMEDIA_TYPE_VIDEO,
-        .flags          = AVFILTERPAD_FLAG_NEEDS_WRITABLE,
         .filter_frame   = oscilloscope_filter_frame,
         .config_props   = oscilloscope_config_input,
+        .needs_writable = 1,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_oscilloscope = {
+static const AVFilterPad oscilloscope_outputs[] = {
+    {
+        .name         = "default",
+        .type         = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_oscilloscope = {
     .name          = "oscilloscope",
     .description   = NULL_IF_CONFIG_SMALL("2D Video Oscilloscope."),
     .priv_size     = sizeof(OscilloscopeContext),
     .priv_class    = &oscilloscope_class,
+    .query_formats = query_formats,
     .uninit        = oscilloscope_uninit,
-    FILTER_INPUTS(oscilloscope_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
+    .inputs        = oscilloscope_inputs,
+    .outputs       = oscilloscope_outputs,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
     .process_command = oscilloscope_process_command,
 };

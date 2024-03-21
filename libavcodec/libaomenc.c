@@ -23,8 +23,6 @@
  * AV1 encoder support via libaom
  */
 
-#include <limits.h>
-
 #define AOM_DISABLE_CTRL_TYPECHECKS 1
 #include <aom/aom_encoder.h>
 #include <aom/aomcx.h>
@@ -32,19 +30,13 @@
 #include "libavutil/avassert.h"
 #include "libavutil/base64.h"
 #include "libavutil/common.h"
-#include "libavutil/cpu.h"
-#include "libavutil/imgutils.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 
 #include "av1.h"
 #include "avcodec.h"
-#include "bsf.h"
-#include "codec_internal.h"
-#include "encode.h"
 #include "internal.h"
-#include "libaom.h"
 #include "packet_internal.h"
 #include "profiles.h"
 
@@ -72,7 +64,6 @@ typedef struct AOMEncoderContext {
     struct aom_codec_ctx encoder;
     struct aom_image rawimg;
     struct aom_fixed_buf twopass_stats;
-    unsigned twopass_stats_size;
     struct FrameListData *coded_frame_list;
     int cpu_used;
     int auto_alt_ref;
@@ -105,7 +96,6 @@ typedef struct AOMEncoderContext {
     int enable_restoration;
     int usage;
     int tune;
-    int still_picture;
     int enable_rect_partitions;
     int enable_1to4_partitions;
     int enable_ab_partitions;
@@ -204,16 +194,6 @@ static const char *const ctlidstr[] = {
     [AV1E_SET_ENABLE_SMOOTH_INTERINTRA] = "AV1E_SET_ENABLE_SMOOTH_INTERINTRA",
     [AV1E_SET_ENABLE_REF_FRAME_MVS]     = "AV1E_SET_ENABLE_REF_FRAME_MVS",
 #endif
-#ifdef AOM_CTRL_AV1E_GET_NUM_OPERATING_POINTS
-    [AV1E_GET_NUM_OPERATING_POINTS]     = "AV1E_GET_NUM_OPERATING_POINTS",
-#endif
-#ifdef AOM_CTRL_AV1E_GET_SEQ_LEVEL_IDX
-    [AV1E_GET_SEQ_LEVEL_IDX]            = "AV1E_GET_SEQ_LEVEL_IDX",
-#endif
-#ifdef AOM_CTRL_AV1E_GET_TARGET_SEQ_LEVEL_IDX
-    [AV1E_GET_TARGET_SEQ_LEVEL_IDX]     = "AV1E_GET_TARGET_SEQ_LEVEL_IDX",
-#endif
-    [AV1_GET_NEW_FRAME_IMAGE]           = "AV1_GET_NEW_FRAME_IMAGE",
 };
 
 static av_cold void log_encoder_error(AVCodecContext *avctx, const char *desc)
@@ -228,10 +208,10 @@ static av_cold void log_encoder_error(AVCodecContext *avctx, const char *desc)
 }
 
 static av_cold void dump_enc_cfg(AVCodecContext *avctx,
-                                 const struct aom_codec_enc_cfg *cfg,
-                                 int level)
+                                 const struct aom_codec_enc_cfg *cfg)
 {
     int width = -30;
+    int level = AV_LOG_DEBUG;
 
     av_log(avctx, level, "aom_codec_enc_cfg\n");
     av_log(avctx, level, "generic settings\n"
@@ -339,97 +319,9 @@ static av_cold int codecctl_int(AVCodecContext *avctx,
     return 0;
 }
 
-#if defined(AOM_CTRL_AV1E_GET_NUM_OPERATING_POINTS) && \
-    defined(AOM_CTRL_AV1E_GET_SEQ_LEVEL_IDX) && \
-    defined(AOM_CTRL_AV1E_GET_TARGET_SEQ_LEVEL_IDX)
-static av_cold int codecctl_intp(AVCodecContext *avctx,
-#ifdef UENUM1BYTE
-                                 aome_enc_control_id id,
-#else
-                                 enum aome_enc_control_id id,
-#endif
-                                 int* ptr)
-{
-    AOMContext *ctx = avctx->priv_data;
-    char buf[80];
-    int width = -30;
-    int res;
-
-    snprintf(buf, sizeof(buf), "%s:", ctlidstr[id]);
-    av_log(avctx, AV_LOG_DEBUG, "  %*s%d\n", width, buf, *ptr);
-
-    res = aom_codec_control(&ctx->encoder, id, ptr);
-    if (res != AOM_CODEC_OK) {
-        snprintf(buf, sizeof(buf), "Failed to set %s codec control",
-                 ctlidstr[id]);
-        log_encoder_error(avctx, buf);
-        return AVERROR(EINVAL);
-    }
-
-    return 0;
-}
-#endif
-
-static av_cold int codecctl_imgp(AVCodecContext *avctx,
-#ifdef UENUM1BYTE
-                                 aome_enc_control_id id,
-#else
-                                 enum aome_enc_control_id id,
-#endif
-                                 struct aom_image *img)
-{
-    AOMContext *ctx = avctx->priv_data;
-    char buf[80];
-    int res;
-
-    snprintf(buf, sizeof(buf), "%s:", ctlidstr[id]);
-
-    res = aom_codec_control(&ctx->encoder, id, img);
-    if (res != AOM_CODEC_OK) {
-        snprintf(buf, sizeof(buf), "Failed to get %s codec control",
-                 ctlidstr[id]);
-        log_encoder_error(avctx, buf);
-        return AVERROR(EINVAL);
-    }
-
-    return 0;
-}
-
 static av_cold int aom_free(AVCodecContext *avctx)
 {
     AOMContext *ctx = avctx->priv_data;
-
-#if defined(AOM_CTRL_AV1E_GET_NUM_OPERATING_POINTS) && \
-    defined(AOM_CTRL_AV1E_GET_SEQ_LEVEL_IDX) && \
-    defined(AOM_CTRL_AV1E_GET_TARGET_SEQ_LEVEL_IDX)
-    if (ctx->encoder.iface && !(avctx->flags & AV_CODEC_FLAG_PASS1)) {
-        int num_operating_points;
-        int levels[32];
-        int target_levels[32];
-
-        if (!codecctl_intp(avctx, AV1E_GET_NUM_OPERATING_POINTS,
-                           &num_operating_points) &&
-            !codecctl_intp(avctx, AV1E_GET_SEQ_LEVEL_IDX, levels) &&
-            !codecctl_intp(avctx, AV1E_GET_TARGET_SEQ_LEVEL_IDX,
-                           target_levels)) {
-            for (int i = 0; i < num_operating_points; i++) {
-                if (levels[i] > target_levels[i]) {
-                    // Warn when the target level was not met
-                    av_log(avctx, AV_LOG_WARNING,
-                           "Could not encode to target level %d.%d for "
-                           "operating point %d. The output level is %d.%d.\n",
-                           2 + (target_levels[i] >> 2), target_levels[i] & 3,
-                           i, 2 + (levels[i] >> 2), levels[i] & 3);
-                } else if (target_levels[i] < 31) {
-                    // Log the encoded level if a target level was given
-                    av_log(avctx, AV_LOG_INFO,
-                           "Output level for operating point %d is %d.%d.\n",
-                           i, 2 + (levels[i] >> 2), levels[i] & 3);
-                }
-            }
-        }
-    }
-#endif
 
     aom_codec_destroy(&ctx->encoder);
     av_freep(&ctx->twopass_stats.buf);
@@ -451,16 +343,16 @@ static int set_pix_fmt(AVCodecContext *avctx, aom_codec_caps_t codec_caps,
         enccfg->monochrome = 1;
         /* Fall-through */
     case AV_PIX_FMT_YUV420P:
-        enccfg->g_profile = AV_PROFILE_AV1_MAIN;
+        enccfg->g_profile = FF_PROFILE_AV1_MAIN;
         *img_fmt = AOM_IMG_FMT_I420;
         return 0;
     case AV_PIX_FMT_YUV422P:
-        enccfg->g_profile = AV_PROFILE_AV1_PROFESSIONAL;
+        enccfg->g_profile = FF_PROFILE_AV1_PROFESSIONAL;
         *img_fmt = AOM_IMG_FMT_I422;
         return 0;
     case AV_PIX_FMT_YUV444P:
     case AV_PIX_FMT_GBRP:
-        enccfg->g_profile = AV_PROFILE_AV1_HIGH;
+        enccfg->g_profile = FF_PROFILE_AV1_HIGH;
         *img_fmt = AOM_IMG_FMT_I444;
         return 0;
     case AV_PIX_FMT_GRAY10:
@@ -471,7 +363,7 @@ static int set_pix_fmt(AVCodecContext *avctx, aom_codec_caps_t codec_caps,
     case AV_PIX_FMT_YUV420P12:
         if (codec_caps & AOM_CODEC_CAP_HIGHBITDEPTH) {
             enccfg->g_profile =
-                enccfg->g_bit_depth == 10 ? AV_PROFILE_AV1_MAIN : AV_PROFILE_AV1_PROFESSIONAL;
+                enccfg->g_bit_depth == 10 ? FF_PROFILE_AV1_MAIN : FF_PROFILE_AV1_PROFESSIONAL;
             *img_fmt = AOM_IMG_FMT_I42016;
             *flags |= AOM_CODEC_USE_HIGHBITDEPTH;
             return 0;
@@ -480,7 +372,7 @@ static int set_pix_fmt(AVCodecContext *avctx, aom_codec_caps_t codec_caps,
     case AV_PIX_FMT_YUV422P10:
     case AV_PIX_FMT_YUV422P12:
         if (codec_caps & AOM_CODEC_CAP_HIGHBITDEPTH) {
-            enccfg->g_profile = AV_PROFILE_AV1_PROFESSIONAL;
+            enccfg->g_profile = FF_PROFILE_AV1_PROFESSIONAL;
             *img_fmt = AOM_IMG_FMT_I42216;
             *flags |= AOM_CODEC_USE_HIGHBITDEPTH;
             return 0;
@@ -492,7 +384,7 @@ static int set_pix_fmt(AVCodecContext *avctx, aom_codec_caps_t codec_caps,
     case AV_PIX_FMT_GBRP12:
         if (codec_caps & AOM_CODEC_CAP_HIGHBITDEPTH) {
             enccfg->g_profile =
-                enccfg->g_bit_depth == 10 ? AV_PROFILE_AV1_HIGH : AV_PROFILE_AV1_PROFESSIONAL;
+                enccfg->g_bit_depth == 10 ? FF_PROFILE_AV1_HIGH : FF_PROFILE_AV1_PROFESSIONAL;
             *img_fmt = AOM_IMG_FMT_I44416;
             *flags |= AOM_CODEC_USE_HIGHBITDEPTH;
             return 0;
@@ -704,7 +596,7 @@ static av_cold int aom_init(AVCodecContext *avctx,
     av_log(avctx, AV_LOG_INFO, "%s\n", aom_codec_version_str());
     av_log(avctx, AV_LOG_VERBOSE, "%s\n", aom_codec_build_config());
 
-    if ((res = aom_codec_enc_config_default(iface, &enccfg, ctx->usage)) != AOM_CODEC_OK) {
+    if ((res = aom_codec_enc_config_default(iface, &enccfg, 0)) != AOM_CODEC_OK) {
         av_log(avctx, AV_LOG_ERROR, "Failed to get config: %s\n",
                aom_codec_err_to_string(res));
         return AVERROR(EINVAL);
@@ -719,7 +611,7 @@ static av_cold int aom_init(AVCodecContext *avctx,
             return AVERROR(EINVAL);
         }
 
-    dump_enc_cfg(avctx, &enccfg, AV_LOG_DEBUG);
+    dump_enc_cfg(avctx, &enccfg);
 
     enccfg.g_w            = avctx->width;
     enccfg.g_h            = avctx->height;
@@ -727,6 +619,8 @@ static av_cold int aom_init(AVCodecContext *avctx,
     enccfg.g_timebase.den = avctx->time_base.den;
     enccfg.g_threads      =
         FFMIN(avctx->thread_count ? avctx->thread_count : av_cpu_count(), 64);
+
+    enccfg.g_usage        = ctx->usage;
 
     if (ctx->lag_in_frames >= 0)
         enccfg.g_lag_in_frames = ctx->lag_in_frames;
@@ -760,11 +654,8 @@ static av_cold int aom_init(AVCodecContext *avctx,
 
     if (avctx->qmin >= 0)
         enccfg.rc_min_quantizer = avctx->qmin;
-    if (avctx->qmax >= 0) {
+    if (avctx->qmax >= 0)
         enccfg.rc_max_quantizer = avctx->qmax;
-    } else if (!ctx->crf) {
-        enccfg.rc_max_quantizer = 0;
-    }
 
     if (enccfg.rc_end_usage == AOM_CQ || enccfg.rc_end_usage == AOM_Q) {
         if (ctx->crf < enccfg.rc_min_quantizer || ctx->crf > enccfg.rc_max_quantizer) {
@@ -842,7 +733,7 @@ static av_cold int aom_init(AVCodecContext *avctx,
     /* 0-3: For non-zero values the encoder increasingly optimizes for reduced
      * complexity playback on low powered devices at the expense of encode
      * quality. */
-    if (avctx->profile != AV_PROFILE_UNKNOWN)
+    if (avctx->profile != FF_PROFILE_UNKNOWN)
         enccfg.g_profile = avctx->profile;
 
     enccfg.g_error_resilient = ctx->error_resilient;
@@ -851,26 +742,13 @@ static av_cold int aom_init(AVCodecContext *avctx,
     if (res < 0)
         return res;
 
-    if (ctx->still_picture) {
-        // Set the maximum number of frames to 1. This will let libaom set
-        // still_picture and reduced_still_picture_header to 1 in the Sequence
-        // Header as required by AVIF still images.
-        enccfg.g_limit = 1;
-        // Reduce memory usage for still images.
-        enccfg.g_lag_in_frames = 0;
-        // All frames will be key frames.
-        enccfg.kf_max_dist = 0;
-        enccfg.kf_mode = AOM_KF_DISABLED;
-    }
-
+    dump_enc_cfg(avctx, &enccfg);
     /* Construct Encoder Context */
     res = aom_codec_enc_init(&ctx->encoder, iface, &enccfg, flags);
     if (res != AOM_CODEC_OK) {
-        dump_enc_cfg(avctx, &enccfg, AV_LOG_WARNING);
         log_encoder_error(avctx, "Failed to initialize encoder");
         return AVERROR(EINVAL);
     }
-    dump_enc_cfg(avctx, &enccfg, AV_LOG_DEBUG);
 
     // codec control failures are currently treated only as warnings
     av_log(avctx, AV_LOG_DEBUG, "aom_codec_control\n");
@@ -1018,7 +896,7 @@ static av_cold int aom_init(AVCodecContext *avctx,
     if (codec_caps & AOM_CODEC_CAP_HIGHBITDEPTH)
         ctx->rawimg.bit_depth = enccfg.g_bit_depth;
 
-    cpb_props = ff_encode_add_cpb_side_data(avctx);
+    cpb_props = ff_add_cpb_side_data(avctx);
     if (!cpb_props)
         return AVERROR(ENOMEM);
 
@@ -1065,6 +943,7 @@ static inline void cx_pktcpy(AOMContext *ctx,
     dst->sz       = src->data.frame.sz;
     dst->buf      = src->data.frame.buf;
 #ifdef AOM_FRAME_IS_INTRAONLY
+    dst->have_sse = 0;
     dst->frame_number = ++ctx->frame_number;
     dst->have_sse = ctx->have_sse;
     if (ctx->have_sse) {
@@ -1088,7 +967,7 @@ static int storeframe(AVCodecContext *avctx, struct FrameListData *cx_frame,
 {
     AOMContext *ctx = avctx->priv_data;
     int av_unused pict_type;
-    int ret = ff_get_encode_buffer(avctx, pkt, cx_frame->sz, 0);
+    int ret = ff_alloc_packet2(avctx, pkt, cx_frame->sz, 0);
     if (ret < 0) {
         av_log(avctx, AV_LOG_ERROR,
                "Error getting output packet of size %"SIZE_SPECIFIER".\n", cx_frame->sz);
@@ -1096,7 +975,6 @@ static int storeframe(AVCodecContext *avctx, struct FrameListData *cx_frame,
     }
     memcpy(pkt->data, cx_frame->buf, pkt->size);
     pkt->pts = pkt->dts = cx_frame->pts;
-    pkt->duration = cx_frame->duration;
 
     if (!!(cx_frame->flags & AOM_FRAME_IS_KEY)) {
         pkt->flags |= AV_PKT_FLAG_KEY;
@@ -1204,17 +1082,14 @@ static int queue_frames(AVCodecContext *avctx, AVPacket *pkt_out)
         case AOM_CODEC_STATS_PKT:
         {
             struct aom_fixed_buf *stats = &ctx->twopass_stats;
-            uint8_t *tmp = av_fast_realloc(stats->buf,
-                                           &ctx->twopass_stats_size,
-                                           stats->sz +
-                                           pkt->data.twopass_stats.sz);
-            if (!tmp) {
-                av_freep(&stats->buf);
+            int err;
+            if ((err = av_reallocp(&stats->buf,
+                                   stats->sz +
+                                   pkt->data.twopass_stats.sz)) < 0) {
                 stats->sz = 0;
                 av_log(avctx, AV_LOG_ERROR, "Stat buffer realloc failed\n");
-                return AVERROR(ENOMEM);
+                return err;
             }
-            stats->buf = tmp;
             memcpy((uint8_t *)stats->buf + stats->sz,
                    pkt->data.twopass_stats.buf, pkt->data.twopass_stats.sz);
             stats->sz += pkt->data.twopass_stats.sz;
@@ -1241,44 +1116,12 @@ static int queue_frames(AVCodecContext *avctx, AVPacket *pkt_out)
     return size;
 }
 
-static enum AVPixelFormat aomfmt_to_pixfmt(struct aom_image *img)
-{
-    switch (img->fmt) {
-    case AOM_IMG_FMT_I420:
-    case AOM_IMG_FMT_I42016:
-        if (img->bit_depth == 8)
-            return img->monochrome ? AV_PIX_FMT_GRAY8 : AV_PIX_FMT_YUV420P;
-        else if (img->bit_depth == 10)
-            return img->monochrome ? AV_PIX_FMT_GRAY10 : AV_PIX_FMT_YUV420P10;
-        else
-            return img->monochrome ? AV_PIX_FMT_GRAY12 : AV_PIX_FMT_YUV420P12;
-    case AOM_IMG_FMT_I422:
-    case AOM_IMG_FMT_I42216:
-        if (img->bit_depth == 8)
-            return AV_PIX_FMT_YUV422P;
-        else if (img->bit_depth == 10)
-            return AV_PIX_FMT_YUV422P10;
-        else
-            return AV_PIX_FMT_YUV422P12;
-    case AOM_IMG_FMT_I444:
-    case AOM_IMG_FMT_I44416:
-        if (img->bit_depth == 8)
-            return AV_PIX_FMT_YUV444P;
-        else if (img->bit_depth == 10)
-            return AV_PIX_FMT_YUV444P10;
-        else
-            return AV_PIX_FMT_YUV444P12;
-    };
-    return AV_PIX_FMT_NONE;
-}
-
 static int aom_encode(AVCodecContext *avctx, AVPacket *pkt,
                       const AVFrame *frame, int *got_packet)
 {
     AOMContext *ctx = avctx->priv_data;
     struct aom_image *rawimg = NULL;
     int64_t timestamp = 0;
-    unsigned long duration = 0;
     int res, coded_size;
     aom_enc_frame_flags_t flags = 0;
 
@@ -1291,24 +1134,6 @@ static int aom_encode(AVCodecContext *avctx, AVPacket *pkt,
         rawimg->stride[AOM_PLANE_U] = frame->linesize[1];
         rawimg->stride[AOM_PLANE_V] = frame->linesize[2];
         timestamp                   = frame->pts;
-
-        if (frame->duration > ULONG_MAX) {
-            av_log(avctx, AV_LOG_WARNING,
-                   "Frame duration too large: %"PRId64"\n", frame->duration);
-        } else if (frame->duration)
-            duration = frame->duration;
-        else if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
-            duration = av_rescale_q(1, av_inv_q(avctx->framerate), avctx->time_base);
-        else {
-FF_DISABLE_DEPRECATION_WARNINGS
-            duration =
-#if FF_API_TICKS_PER_FRAME
-                avctx->ticks_per_frame ? avctx->ticks_per_frame :
-#endif
-                1;
-FF_ENABLE_DEPRECATION_WARNINGS
-        }
-
         switch (frame->color_range) {
         case AVCOL_RANGE_MPEG:
             rawimg->range = AOM_CR_STUDIO_RANGE;
@@ -1322,14 +1147,13 @@ FF_ENABLE_DEPRECATION_WARNINGS
             flags |= AOM_EFLAG_FORCE_KF;
     }
 
-    res = aom_codec_encode(&ctx->encoder, rawimg, timestamp, duration, flags);
+    res = aom_codec_encode(&ctx->encoder, rawimg, timestamp,
+                           avctx->ticks_per_frame, flags);
     if (res != AOM_CODEC_OK) {
         log_encoder_error(avctx, "Error encoding frame");
         return AVERROR_INVALIDDATA;
     }
     coded_size = queue_frames(avctx, pkt);
-    if (coded_size < 0)
-        return coded_size;
 
     if (!frame && avctx->flags & AV_CODEC_FLAG_PASS1) {
         size_t b64_size = AV_BASE64_SIZE(ctx->twopass_stats.sz);
@@ -1345,43 +1169,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     *got_packet = !!coded_size;
-
-    if (*got_packet && avctx->flags & AV_CODEC_FLAG_RECON_FRAME) {
-        AVCodecInternal *avci = avctx->internal;
-        struct aom_image img;
-
-        av_frame_unref(avci->recon_frame);
-
-        res = codecctl_imgp(avctx, AV1_GET_NEW_FRAME_IMAGE, &img);
-        if (res < 0)
-            return res;
-
-        avci->recon_frame->format = aomfmt_to_pixfmt(&img);
-        if (avci->recon_frame->format == AV_PIX_FMT_NONE) {
-            av_log(ctx, AV_LOG_ERROR,
-                   "Unhandled reconstructed frame colorspace: %d\n",
-                   img.fmt);
-            return AVERROR(ENOSYS);
-        }
-
-        avci->recon_frame->width  = img.d_w;
-        avci->recon_frame->height = img.d_h;
-
-        res = av_frame_get_buffer(avci->recon_frame, 0);
-        if (res < 0)
-            return res;
-
-        if ((img.fmt & AOM_IMG_FMT_HIGHBITDEPTH) && img.bit_depth == 8)
-            ff_aom_image_copy_16_to_8(avci->recon_frame, &img);
-        else {
-            const uint8_t *planes[4] = { img.planes[0], img.planes[1], img.planes[2] };
-            const int      stride[4] = { img.stride[0], img.stride[1], img.stride[2] };
-
-            av_image_copy(avci->recon_frame->data, avci->recon_frame->linesize, planes,
-                          stride, avci->recon_frame->format, img.d_w, img.d_h);
-        }
-    }
-
     return 0;
 }
 
@@ -1437,19 +1224,19 @@ static const enum AVPixelFormat av1_pix_fmts_highbd_with_gray[] = {
     AV_PIX_FMT_NONE
 };
 
-static av_cold void av1_init_static(FFCodec *codec)
+static av_cold void av1_init_static(AVCodec *codec)
 {
     int supports_monochrome = aom_codec_version() >= 20001;
     aom_codec_caps_t codec_caps = aom_codec_get_caps(aom_codec_av1_cx());
     if (codec_caps & AOM_CODEC_CAP_HIGHBITDEPTH)
-        codec->p.pix_fmts = supports_monochrome ? av1_pix_fmts_highbd_with_gray :
-                                                  av1_pix_fmts_highbd;
+        codec->pix_fmts = supports_monochrome ? av1_pix_fmts_highbd_with_gray :
+                                                av1_pix_fmts_highbd;
     else
-        codec->p.pix_fmts = supports_monochrome ? av1_pix_fmts_with_gray :
-                                                  av1_pix_fmts;
+        codec->pix_fmts = supports_monochrome ? av1_pix_fmts_with_gray :
+                                                av1_pix_fmts;
 
     if (aom_codec_version_major() < 2)
-        codec->p.capabilities |= AV_CODEC_CAP_EXPERIMENTAL;
+        codec->capabilities |= AV_CODEC_CAP_EXPERIMENTAL;
 }
 
 static av_cold int av1_init(AVCodecContext *avctx)
@@ -1467,13 +1254,13 @@ static const AVOption options[] = {
                          "alternate reference frame selection",    OFFSET(lag_in_frames),   AV_OPT_TYPE_INT, {.i64 = -1},      -1,      INT_MAX, VE},
     { "arnr-max-frames", "altref noise reduction max frame count", OFFSET(arnr_max_frames), AV_OPT_TYPE_INT, {.i64 = -1},      -1,      INT_MAX, VE},
     { "arnr-strength",   "altref noise reduction filter strength", OFFSET(arnr_strength),   AV_OPT_TYPE_INT, {.i64 = -1},      -1,      6,       VE},
-    { "aq-mode",         "adaptive quantization mode",             OFFSET(aq_mode),         AV_OPT_TYPE_INT, {.i64 = -1},      -1,      4, VE, .unit = "aq_mode"},
-    { "none",            "Aq not used",         0, AV_OPT_TYPE_CONST, {.i64 = 0}, 0, 0, VE, .unit = "aq_mode"},
-    { "variance",        "Variance based Aq",   0, AV_OPT_TYPE_CONST, {.i64 = 1}, 0, 0, VE, .unit = "aq_mode"},
-    { "complexity",      "Complexity based Aq", 0, AV_OPT_TYPE_CONST, {.i64 = 2}, 0, 0, VE, .unit = "aq_mode"},
-    { "cyclic",          "Cyclic Refresh Aq",   0, AV_OPT_TYPE_CONST, {.i64 = 3}, 0, 0, VE, .unit = "aq_mode"},
-    { "error-resilience", "Error resilience configuration", OFFSET(error_resilient), AV_OPT_TYPE_FLAGS, {.i64 = 0}, INT_MIN, INT_MAX, VE, .unit = "er"},
-    { "default",         "Improve resiliency against losses of whole frames", 0, AV_OPT_TYPE_CONST, {.i64 = AOM_ERROR_RESILIENT_DEFAULT}, 0, 0, VE, .unit = "er"},
+    { "aq-mode",         "adaptive quantization mode",             OFFSET(aq_mode),         AV_OPT_TYPE_INT, {.i64 = -1},      -1,      4, VE, "aq_mode"},
+    { "none",            "Aq not used",         0, AV_OPT_TYPE_CONST, {.i64 = 0}, 0, 0, VE, "aq_mode"},
+    { "variance",        "Variance based Aq",   0, AV_OPT_TYPE_CONST, {.i64 = 1}, 0, 0, VE, "aq_mode"},
+    { "complexity",      "Complexity based Aq", 0, AV_OPT_TYPE_CONST, {.i64 = 2}, 0, 0, VE, "aq_mode"},
+    { "cyclic",          "Cyclic Refresh Aq",   0, AV_OPT_TYPE_CONST, {.i64 = 3}, 0, 0, VE, "aq_mode"},
+    { "error-resilience", "Error resilience configuration", OFFSET(error_resilient), AV_OPT_TYPE_FLAGS, {.i64 = 0}, INT_MIN, INT_MAX, VE, "er"},
+    { "default",         "Improve resiliency against losses of whole frames", 0, AV_OPT_TYPE_CONST, {.i64 = AOM_ERROR_RESILIENT_DEFAULT}, 0, 0, VE, "er"},
     { "crf",              "Select the quality for constant quality mode", offsetof(AOMContext, crf), AV_OPT_TYPE_INT, {.i64 = -1}, -1, 63, VE },
     { "static-thresh",    "A change threshold on blocks below which they will be skipped by the encoder", OFFSET(static_thresh), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, VE },
     { "drop-threshold",   "Frame drop threshold", offsetof(AOMContext, drop_threshold), AV_OPT_TYPE_INT, {.i64 = 0 }, INT_MIN, INT_MAX, VE },
@@ -1492,15 +1279,13 @@ static const AVOption options[] = {
     { "enable-global-motion",  "Enable global motion",             OFFSET(enable_global_motion), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
     { "enable-intrabc",  "Enable intra block copy prediction mode", OFFSET(enable_intrabc), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
     { "enable-restoration", "Enable Loop Restoration filtering", OFFSET(enable_restoration), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
-    { "usage",           "Quality and compression efficiency vs speed trade-off", OFFSET(usage), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, VE, .unit = "usage"},
-    { "good",            "Good quality",      0, AV_OPT_TYPE_CONST, {.i64 = 0 /* AOM_USAGE_GOOD_QUALITY */}, 0, 0, VE, .unit = "usage"},
-    { "realtime",        "Realtime encoding", 0, AV_OPT_TYPE_CONST, {.i64 = 1 /* AOM_USAGE_REALTIME */},     0, 0, VE, .unit = "usage"},
-    { "allintra",        "All Intra encoding", 0, AV_OPT_TYPE_CONST, {.i64 = 2 /* AOM_USAGE_ALL_INTRA */},    0, 0, VE, .unit = "usage"},
-    { "tune",            "The metric that the encoder tunes for. Automatically chosen by the encoder by default", OFFSET(tune), AV_OPT_TYPE_INT, {.i64 = -1}, -1, AOM_TUNE_SSIM, VE, .unit = "tune"},
-    { "psnr",            NULL,         0, AV_OPT_TYPE_CONST, {.i64 = AOM_TUNE_PSNR}, 0, 0, VE, .unit = "tune"},
-    { "ssim",            NULL,         0, AV_OPT_TYPE_CONST, {.i64 = AOM_TUNE_SSIM}, 0, 0, VE, .unit = "tune"},
+    { "usage",           "Quality and compression efficiency vs speed trade-off", OFFSET(usage), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, VE, "usage"},
+    { "good",            "Good quality",      0, AV_OPT_TYPE_CONST, {.i64 = 0 /* AOM_USAGE_GOOD_QUALITY */}, 0, 0, VE, "usage"},
+    { "realtime",        "Realtime encoding", 0, AV_OPT_TYPE_CONST, {.i64 = 1 /* AOM_USAGE_REALTIME */},     0, 0, VE, "usage"},
+    { "tune",            "The metric that the encoder tunes for. Automatically chosen by the encoder by default", OFFSET(tune), AV_OPT_TYPE_INT, {.i64 = -1}, -1, AOM_TUNE_SSIM, VE, "tune"},
+    { "psnr",            NULL,         0, AV_OPT_TYPE_CONST, {.i64 = AOM_TUNE_PSNR}, 0, 0, VE, "tune"},
+    { "ssim",            NULL,         0, AV_OPT_TYPE_CONST, {.i64 = AOM_TUNE_SSIM}, 0, 0, VE, "tune"},
     FF_AV1_PROFILE_OPTS
-    { "still-picture", "Encode in single frame mode (typically used for still AVIF images).", OFFSET(still_picture), AV_OPT_TYPE_BOOL, {.i64 = 0}, -1, 1, VE },
     { "enable-rect-partitions", "Enable rectangular partitions", OFFSET(enable_rect_partitions), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
     { "enable-1to4-partitions", "Enable 1:4/4:1 partitions",     OFFSET(enable_1to4_partitions), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
     { "enable-ab-partitions",   "Enable ab shape partitions",    OFFSET(enable_ab_partitions),   AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VE},
@@ -1535,7 +1320,7 @@ static const AVOption options[] = {
     { NULL },
 };
 
-static const FFCodecDefault defaults[] = {
+static const AVCodecDefault defaults[] = {
     { "b",                 "0" },
     { "qmin",             "-1" },
     { "qmax",             "-1" },
@@ -1551,24 +1336,20 @@ static const AVClass class_aom = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-FFCodec ff_libaom_av1_encoder = {
-    .p.name         = "libaom-av1",
-    CODEC_LONG_NAME("libaom AV1"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AV1,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
-                      AV_CODEC_CAP_ENCODER_RECON_FRAME |
-                      AV_CODEC_CAP_OTHER_THREADS,
-    .p.profiles     = NULL_IF_CONFIG_SMALL(ff_av1_profiles),
-    .p.priv_class   = &class_aom,
-    .p.wrapper_name = "libaom",
+AVCodec ff_libaom_av1_encoder = {
+    .name           = "libaom-av1",
+    .long_name      = NULL_IF_CONFIG_SMALL("libaom AV1"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AV1,
     .priv_data_size = sizeof(AOMContext),
     .init           = av1_init,
-    FF_CODEC_ENCODE_CB(aom_encode),
+    .encode2        = aom_encode,
     .close          = aom_free,
-    .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP |
-                      FF_CODEC_CAP_AUTO_THREADS,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_OTHER_THREADS,
+    .caps_internal  = FF_CODEC_CAP_AUTO_THREADS,
+    .profiles       = NULL_IF_CONFIG_SMALL(ff_av1_profiles),
+    .priv_class     = &class_aom,
     .defaults       = defaults,
     .init_static_data = av1_init_static,
+    .wrapper_name   = "libaom",
 };

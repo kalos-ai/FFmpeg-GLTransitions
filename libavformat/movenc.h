@@ -26,7 +26,6 @@
 
 #include "avformat.h"
 #include "movenccenc.h"
-#include "libavcodec/packet_internal.h"
 
 #define MOV_FRAG_INFO_ALLOC_INCREMENT 64
 #define MOV_INDEX_CLUSTER_SIZE 1024
@@ -43,7 +42,6 @@
 #define MODE_IPOD 0x20
 #define MODE_ISM  0x40
 #define MODE_F4V  0x80
-#define MODE_AVIF 0x100
 
 typedef struct MOVIentry {
     uint64_t     pos;
@@ -62,7 +60,7 @@ typedef struct MOVIentry {
 } MOVIentry;
 
 typedef struct HintSample {
-    const uint8_t *data;
+    uint8_t *data;
     int size;
     int sample_number;
     int offset;
@@ -108,7 +106,6 @@ typedef struct MOVTrack {
     int         tag; ///< stsd fourcc
     AVStream        *st;
     AVCodecParameters *par;
-    int mono_as_fc;
     int multichannel_as_mono;
 
     int         vos_len;
@@ -141,6 +138,7 @@ typedef struct MOVTrack {
 
     AVIOContext *mdat_buf;
     int64_t     data_offset;
+    int64_t     frag_start;
     int         frag_discont;
     int         entries_flushed;
 
@@ -166,15 +164,6 @@ typedef struct MOVTrack {
     int pal_done;
 
     int is_unaligned_qt_rgb;
-
-    unsigned int squash_fragment_samples_to_one; //< flag to note formats where all samples for a fragment are to be squashed
-
-    PacketList squashed_packet_queue;
-
-    struct IAMFContext *iamf;
-    int first_iamf_idx;
-    int last_iamf_idx;
-    AVIOContext *iamf_buf;
 } MOVTrack;
 
 typedef enum {
@@ -194,7 +183,6 @@ typedef struct MOVMuxContext {
     int     mode;
     int64_t time;
     int     nb_streams;
-    int     nb_tracks;
     int     nb_meta_tmcd;  ///< number of new created tmcd track based on metadata (aka not data copy)
     int     chapter_track; ///< qt chapter track number
     int64_t mdat_pos;
@@ -246,16 +234,9 @@ typedef struct MOVMuxContext {
 
     int use_stream_ids_as_track_ids;
     int track_ids_ok;
-    int write_btrt;
     int write_tmcd;
     MOVPrftBox write_prft;
     int empty_hdlr_name;
-    int movie_timescale;
-
-    int64_t avif_extent_pos[2];  // index 0 is YUV and 1 is Alpha.
-    int avif_extent_length[2];   // index 0 is YUV and 1 is Alpha.
-    int is_animated_avif;
-    int avif_loop_count;
 } MOVMuxContext;
 
 #define FF_MOV_FLAG_RTP_HINT              (1 <<  0)

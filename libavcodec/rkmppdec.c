@@ -27,9 +27,9 @@
 #include <unistd.h>
 
 #include "avcodec.h"
-#include "codec_internal.h"
 #include "decode.h"
 #include "hwconfig.h"
+#include "internal.h"
 #include "libavutil/buffer.h"
 #include "libavutil/common.h"
 #include "libavutil/frame.h"
@@ -404,10 +404,8 @@ static int rkmpp_retrieve_frame(AVCodecContext *avctx, AVFrame *frame)
         frame->colorspace       = mpp_frame_get_colorspace(mppframe);
 
         mode = mpp_frame_get_mode(mppframe);
-        if ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_DEINTERLACED)
-            frame->flags |= AV_FRAME_FLAG_INTERLACED;
-        if ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_TOP_FIRST)
-            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+        frame->interlaced_frame = ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_DEINTERLACED);
+        frame->top_field_first  = ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_TOP_FIRST);
 
         mppformat = mpp_frame_get_fmt(mppframe);
         drmformat = rkmpp_get_frameformat(mppformat);
@@ -563,22 +561,23 @@ static const AVCodecHWConfigInternal *const rkmpp_hw_configs[] = {
 
 #define RKMPP_DEC(NAME, ID, BSFS) \
     RKMPP_DEC_CLASS(NAME) \
-    const FFCodec ff_##NAME##_rkmpp_decoder = { \
-        .p.name         = #NAME "_rkmpp", \
-        CODEC_LONG_NAME(#NAME " (rkmpp)"), \
-        .p.type         = AVMEDIA_TYPE_VIDEO, \
-        .p.id           = ID, \
+    AVCodec ff_##NAME##_rkmpp_decoder = { \
+        .name           = #NAME "_rkmpp", \
+        .long_name      = NULL_IF_CONFIG_SMALL(#NAME " (rkmpp)"), \
+        .type           = AVMEDIA_TYPE_VIDEO, \
+        .id             = ID, \
         .priv_data_size = sizeof(RKMPPDecodeContext), \
         .init           = rkmpp_init_decoder, \
         .close          = rkmpp_close_decoder, \
-        FF_CODEC_RECEIVE_FRAME_CB(rkmpp_receive_frame), \
+        .receive_frame  = rkmpp_receive_frame, \
         .flush          = rkmpp_flush, \
-        .p.priv_class   = &rkmpp_##NAME##_dec_class, \
-        .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
+        .priv_class     = &rkmpp_##NAME##_dec_class, \
+        .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
+        .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, \
+                                                         AV_PIX_FMT_NONE}, \
         .hw_configs     = rkmpp_hw_configs, \
         .bsfs           = BSFS, \
-        .p.wrapper_name = "rkmpp", \
-        .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE, \
+        .wrapper_name   = "rkmpp", \
     };
 
 RKMPP_DEC(h264,  AV_CODEC_ID_H264,          "h264_mp4toannexb")

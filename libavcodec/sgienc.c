@@ -23,8 +23,7 @@
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "encode.h"
+#include "internal.h"
 #include "sgi.h"
 #include "rle.h"
 
@@ -96,10 +95,24 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     SgiContext *s = avctx->priv_data;
     const AVFrame * const p = frame;
     PutByteContext pbc;
-    uint8_t *encode_buf;
+    uint8_t *in_buf, *encode_buf;
     int x, y, z, length, tablesize, ret, i;
     unsigned int width, height, depth, dimension;
     unsigned int bytes_per_channel, pixmax, put_be;
+
+#if FF_API_CODED_FRAME
+FF_DISABLE_DEPRECATION_WARNINGS
+    avctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
+    avctx->coded_frame->key_frame = 1;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
+
+#if FF_API_CODER_TYPE
+FF_DISABLE_DEPRECATION_WARNINGS
+    if (avctx->coder_type == FF_CODER_TYPE_RAW)
+        s->rle = 0;
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
 
     width  = avctx->width;
     height = avctx->height;
@@ -155,7 +168,7 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     else // assume sgi_rle_encode() produces at most 2x size of input
         length += tablesize * 2 + depth * height * (2 * width + 1);
 
-    if ((ret = ff_alloc_packet(avctx, pkt, bytes_per_channel * length)) < 0)
+    if ((ret = ff_alloc_packet2(avctx, pkt, bytes_per_channel * length, 0)) < 0)
         return ret;
 
     bytestream2_init_writer(&pbc, pkt->data, pkt->size);
@@ -200,7 +213,7 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
             return AVERROR(ENOMEM);
 
         for (z = 0; z < depth; z++) {
-            const uint8_t *in_buf = p->data[0] + p->linesize[0] * (height - 1) + z * bytes_per_channel;
+            in_buf = p->data[0] + p->linesize[0] * (height - 1) + z * bytes_per_channel;
 
             for (y = 0; y < height; y++) {
                 bytestream2_put_be32(&taboff_pcb, bytestream2_tell_p(&pbc));
@@ -231,7 +244,7 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         av_free(encode_buf);
     } else {
         for (z = 0; z < depth; z++) {
-            const uint8_t *in_buf = p->data[0] + p->linesize[0] * (height - 1) + z * bytes_per_channel;
+            in_buf = p->data[0] + p->linesize[0] * (height - 1) + z * bytes_per_channel;
 
             for (y = 0; y < height; y++) {
                 for (x = 0; x < width * depth; x += depth)
@@ -250,6 +263,7 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 
     /* total length */
     pkt->size   = bytestream2_tell_p(&pbc);
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
 
     return 0;
@@ -270,21 +284,21 @@ static const AVClass sgi_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFCodec ff_sgi_encoder = {
-    .p.name    = "sgi",
-    CODEC_LONG_NAME("SGI image"),
-    .p.type    = AVMEDIA_TYPE_VIDEO,
-    .p.id      = AV_CODEC_ID_SGI,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+AVCodec ff_sgi_encoder = {
+    .name      = "sgi",
+    .long_name = NULL_IF_CONFIG_SMALL("SGI image"),
+    .type      = AVMEDIA_TYPE_VIDEO,
+    .id        = AV_CODEC_ID_SGI,
     .priv_data_size = sizeof(SgiContext),
-    .p.priv_class = &sgi_class,
+    .priv_class = &sgi_class,
     .init      = encode_init,
-    FF_CODEC_ENCODE_CB(encode_frame),
-    .p.pix_fmts = (const enum AVPixelFormat[]) {
+    .encode2   = encode_frame,
+    .pix_fmts  = (const enum AVPixelFormat[]) {
         AV_PIX_FMT_RGB24, AV_PIX_FMT_RGBA,
         AV_PIX_FMT_RGB48LE, AV_PIX_FMT_RGB48BE,
         AV_PIX_FMT_RGBA64LE, AV_PIX_FMT_RGBA64BE,
         AV_PIX_FMT_GRAY16LE, AV_PIX_FMT_GRAY16BE, AV_PIX_FMT_GRAY8,
         AV_PIX_FMT_NONE
     },
+    .caps_internal = FF_CODEC_CAP_INIT_THREADSAFE,
 };

@@ -33,20 +33,15 @@
 #include "libavutil/intfloat.h"
 #include "libavutil/dict.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "pcm.h"
 #include "sox.h"
 
 static int sox_probe(const AVProbeData *p)
 {
-    if (AV_RL32(p->buf) != SOX_TAG && AV_RB32(p->buf) != SOX_TAG)
-        return 0;
-    if (AV_RN32(p->buf+4) == 0)
-        return 0;
-    if (AV_RN32(p->buf+24) == 0)
-        return 0;
-    return AVPROBE_SCORE_MAX;
+    if (AV_RL32(p->buf) == SOX_TAG || AV_RB32(p->buf) == SOX_TAG)
+        return AVPROBE_SCORE_MAX;
+    return 0;
 }
 
 static int sox_read_header(AVFormatContext *s)
@@ -54,7 +49,6 @@ static int sox_read_header(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     unsigned header_size, comment_size;
     double sample_rate, sample_rate_frac;
-    int channels;
     AVStream *st;
 
     st = avformat_new_stream(s, NULL);
@@ -68,18 +62,16 @@ static int sox_read_header(AVFormatContext *s)
         header_size         = avio_rl32(pb);
         avio_skip(pb, 8); /* sample count */
         sample_rate         = av_int2double(avio_rl64(pb));
-        channels            = avio_rl32(pb);
+        st->codecpar->channels = avio_rl32(pb);
         comment_size        = avio_rl32(pb);
     } else {
         st->codecpar->codec_id = AV_CODEC_ID_PCM_S32BE;
         header_size         = avio_rb32(pb);
         avio_skip(pb, 8); /* sample count */
         sample_rate         = av_int2double(avio_rb64(pb));
-        channels            = avio_rb32(pb);
+        st->codecpar->channels = avio_rb32(pb);
         comment_size        = avio_rb32(pb);
     }
-
-    st->codecpar->ch_layout.nb_channels = channels;
 
     if (comment_size > 0xFFFFFFFFU - SOX_FIXED_HDR - 4U) {
         av_log(s, AV_LOG_ERROR, "invalid comment size (%u)\n", comment_size);
@@ -98,7 +90,7 @@ static int sox_read_header(AVFormatContext *s)
                sample_rate_frac);
 
     if ((header_size + 4) & 7 || header_size < SOX_FIXED_HDR + comment_size
-        || channels > 65535 || channels <= 0) /* Reserve top 16 bits */ {
+        || st->codecpar->channels > 65535 || st->codecpar->channels <= 0) /* Reserve top 16 bits */ {
         av_log(s, AV_LOG_ERROR, "invalid header\n");
         return AVERROR_INVALIDDATA;
     }
@@ -123,18 +115,18 @@ static int sox_read_header(AVFormatContext *s)
     st->codecpar->bits_per_coded_sample = 32;
     st->codecpar->bit_rate              = (int64_t)st->codecpar->sample_rate *
                                           st->codecpar->bits_per_coded_sample *
-                                          channels;
+                                          st->codecpar->channels;
     st->codecpar->block_align           = st->codecpar->bits_per_coded_sample *
-                                          channels / 8;
+                                          st->codecpar->channels / 8;
 
     avpriv_set_pts_info(st, 64, 1, st->codecpar->sample_rate);
 
     return 0;
 }
 
-const FFInputFormat ff_sox_demuxer = {
-    .p.name         = "sox",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("SoX (Sound eXchange) native"),
+AVInputFormat ff_sox_demuxer = {
+    .name           = "sox",
+    .long_name      = NULL_IF_CONFIG_SMALL("SoX native"),
     .read_probe     = sox_probe,
     .read_header    = sox_read_header,
     .read_packet    = ff_pcm_read_packet,

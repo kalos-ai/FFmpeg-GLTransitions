@@ -18,12 +18,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/avassert.h"
 #include "libavutil/common.h"
 #include "avcodec.h"
 #include "get_bits.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 #define PALDATA_FOLLOWS_TILEDATA 4
 #define HAVE_COMPRESSED_TILEMAP 32
@@ -127,18 +127,19 @@ static int decode_index_palmap(SGAVideoContext *s, AVFrame *frame)
 
 static int decode_index_tilemap(SGAVideoContext *s, AVFrame *frame)
 {
-    GetByteContext *gb = &s->gb, gb2;
+    GetByteContext *gb = &s->gb;
+    GetBitContext pm;
 
     bytestream2_seek(gb, s->tilemapdata_offset, SEEK_SET);
     if (bytestream2_get_bytes_left(gb) < s->tilemapdata_size)
         return AVERROR_INVALIDDATA;
 
-    gb2 = *gb;
+    init_get_bits8(&pm, gb->buffer, s->tilemapdata_size);
 
     for (int y = 0; y < s->tiles_h; y++) {
         for (int x = 0; x < s->tiles_w; x++) {
             uint8_t tile[64];
-            int tilemap = bytestream2_get_be16u(&gb2);
+            int tilemap = get_bits(&pm, 16);
             int flip_x = (tilemap >> 11) & 1;
             int flip_y = (tilemap >> 12) & 1;
             int tindex = av_clip((tilemap & 511) - 1, 0, s->nb_tiles - 1);
@@ -305,11 +306,12 @@ static int decode_tiledata(AVCodecContext *avctx)
     return 0;
 }
 
-static int sga_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int sga_decode_frame(AVCodecContext *avctx, void *data,
                             int *got_frame, AVPacket *avpkt)
 {
     SGAVideoContext *s = avctx->priv_data;
     GetByteContext *gb = &s->gb;
+    AVFrame *frame = data;
     int ret, type;
 
     if (avpkt->size <= 14)
@@ -496,13 +498,9 @@ static int sga_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     }
 
     memcpy(frame->data[1], s->pal, AVPALETTE_SIZE);
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
     frame->palette_has_changed = 1;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
     frame->pict_type = AV_PICTURE_TYPE_I;
-    frame->flags |= AV_FRAME_FLAG_KEY;
+    frame->key_frame = 1;
 
     *got_frame = 1;
 
@@ -522,14 +520,15 @@ static av_cold int sga_decode_end(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_sga_decoder = {
-    .p.name         = "sga",
-    CODEC_LONG_NAME("Digital Pictures SGA Video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_SGA_VIDEO,
+AVCodec ff_sga_decoder = {
+    .name           = "sga",
+    .long_name      = NULL_IF_CONFIG_SMALL("Digital Pictures SGA Video"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_SGA_VIDEO,
     .priv_data_size = sizeof(SGAVideoContext),
     .init           = sga_decode_init,
-    FF_CODEC_DECODE_CB(sga_decode_frame),
+    .decode         = sga_decode_frame,
     .close          = sga_decode_end,
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

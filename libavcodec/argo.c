@@ -19,15 +19,18 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "libavutil/imgutils.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 typedef struct ArgoContext {
     GetByteContext gb;
@@ -56,7 +59,7 @@ static int decode_pal8(AVCodecContext *avctx, uint32_t *pal)
         return AVERROR_INVALIDDATA;
 
     for (int i = 0; i < count; i++)
-        pal[start + i] = (0xFFU << 24) | bytestream2_get_be24u(gb);
+        pal[start + i] = (0xFF << 24U) | bytestream2_get_be24u(gb);
 
     return 0;
 }
@@ -596,7 +599,7 @@ static int decode_rle(AVCodecContext *avctx, AVFrame *frame)
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
+static int decode_frame(AVCodecContext *avctx, void *data,
                         int *got_frame, AVPacket *avpkt)
 {
     ArgoContext *s = avctx->priv_data;
@@ -604,9 +607,6 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     AVFrame *frame = s->frame;
     uint32_t chunk;
     int ret;
-
-    if (avpkt->size < 4)
-        return AVERROR_INVALIDDATA;
 
     bytestream2_init(gb, avpkt->data, avpkt->size);
 
@@ -662,14 +662,11 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     if (avctx->pix_fmt == AV_PIX_FMT_PAL8)
         memcpy(frame->data[1], s->pal, AVPALETTE_SIZE);
 
-    if ((ret = av_frame_ref(rframe, s->frame)) < 0)
+    if ((ret = av_frame_ref(data, s->frame)) < 0)
         return ret;
 
     frame->pict_type = s->key ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_P;
-    if (s->key)
-        frame->flags |= AV_FRAME_FLAG_KEY;
-    else
-        frame->flags &= ~AV_FRAME_FLAG_KEY;
+    frame->key_frame = s->key;
     *got_frame = 1;
 
     return avpkt->size;
@@ -679,18 +676,13 @@ static av_cold int decode_init(AVCodecContext *avctx)
 {
     ArgoContext *s = avctx->priv_data;
 
-    switch (avctx->bits_per_coded_sample) {
+    switch (avctx->bits_per_raw_sample) {
     case  8: s->bpp = 1;
              avctx->pix_fmt = AV_PIX_FMT_PAL8; break;
     case 24: s->bpp = 4;
              avctx->pix_fmt = AV_PIX_FMT_BGR0; break;
-    default: avpriv_request_sample(s, "depth == %u", avctx->bits_per_coded_sample);
+    default: avpriv_request_sample(s, "depth == %u", avctx->bits_per_raw_sample);
              return AVERROR_PATCHWELCOME;
-    }
-
-    if (avctx->width % 2 || avctx->height % 2) {
-        avpriv_request_sample(s, "Odd dimensions\n");
-        return AVERROR_PATCHWELCOME;
     }
 
     s->frame = av_frame_alloc();
@@ -733,16 +725,16 @@ static av_cold int decode_close(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_argo_decoder = {
-    .p.name         = "argo",
-    CODEC_LONG_NAME("Argonaut Games Video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_ARGO,
+AVCodec ff_argo_decoder = {
+    .name           = "argo",
+    .long_name      = NULL_IF_CONFIG_SMALL("Argonaut Games Video"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_ARGO,
     .priv_data_size = sizeof(ArgoContext),
     .init           = decode_init,
-    FF_CODEC_DECODE_CB(decode_frame),
+    .decode         = decode_frame,
     .flush          = decode_flush,
     .close          = decode_close,
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_DR1,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

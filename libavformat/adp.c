@@ -22,7 +22,6 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 static int adp_probe(const AVProbeData *p)
@@ -56,7 +55,8 @@ static int adp_read_header(AVFormatContext *s)
 
     st->codecpar->codec_type     = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id       = AV_CODEC_ID_ADPCM_DTK;
-    st->codecpar->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+    st->codecpar->channel_layout = AV_CH_LAYOUT_STEREO;
+    st->codecpar->channels       = 2;
     st->codecpar->sample_rate    = 48000;
     st->start_time            = 0;
     if (s->pb->seekable & AVIO_SEEKABLE_NORMAL)
@@ -83,11 +83,11 @@ static int adp_read_packet(AVFormatContext *s, AVPacket *pkt)
     return ret;
 }
 
-const FFInputFormat ff_adp_demuxer = {
-    .p.name         = "adp",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("ADP"),
-    .p.extensions   = "adp,dtk",
+AVInputFormat ff_adp_demuxer = {
+    .name           = "adp",
+    .long_name      = NULL_IF_CONFIG_SMALL("ADP"),
     .read_probe     = adp_probe,
     .read_header    = adp_read_header,
     .read_packet    = adp_read_packet,
+    .extensions     = "adp,dtk",
 };

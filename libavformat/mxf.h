@@ -21,16 +21,15 @@
 #ifndef AVFORMAT_MXF_H
 #define AVFORMAT_MXF_H
 
+#include "avformat.h"
+#include "libavcodec/avcodec.h"
 #include <stdint.h>
-#include "libavutil/log.h"
-#include "libavutil/pixfmt.h"
-#include "libavutil/rational.h"
-#include "libavutil/uuid.h"
 
-typedef AVUUID UID;
+typedef uint8_t UID[16];
 
 enum MXFMetadataSetType {
-    MaterialPackage = 1,
+    AnyType,
+    MaterialPackage,
     SourcePackage,
     SourceClip,
     TimecodeComponent,
@@ -50,12 +49,6 @@ enum MXFMetadataSetType {
     TaggedValue,
     TapeDescriptor,
     AVCSubDescriptor,
-    AudioChannelLabelSubDescriptor,
-    SoundfieldGroupLabelSubDescriptor,
-    GroupOfSoundfieldGroupsLabelSubDescriptor,
-    FFV1SubDescriptor,
-    JPEG2000SubDescriptor,
-    MetadataSetTypeNB
 };
 
 enum MXFFrameLayout {
@@ -82,8 +75,7 @@ typedef enum {
     NormalWrap = 0,
     D10D11Wrap,
     RawAWrap,
-    RawVWrap,
-    J2KWrap
+    RawVWrap
 } MXFWrappingIndicatorType;
 
 typedef struct MXFLocalTagPair {

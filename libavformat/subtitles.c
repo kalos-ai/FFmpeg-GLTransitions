@@ -21,6 +21,7 @@
 #include "avformat.h"
 #include "subtitles.h"
 #include "avio_internal.h"
+#include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 
 void ff_text_init_avio(void *s, FFTextReader *r, AVIOContext *pb)
@@ -49,10 +50,11 @@ void ff_text_init_avio(void *s, FFTextReader *r, AVIOContext *pb)
                "UTF16 is automatically converted to UTF8, do not specify a character encoding\n");
 }
 
-void ff_text_init_buf(FFTextReader *r, const void *buf, size_t size)
+void ff_text_init_buf(FFTextReader *r, void *buf, size_t size)
 {
-    ffio_init_read_context(&r->buf_pb, buf, size);
-    ff_text_init_avio(NULL, r, &r->buf_pb.pub);
+    memset(&r->buf_pb, 0, sizeof(r->buf_pb));
+    ffio_init_context(&r->buf_pb, buf, size, 0, NULL, NULL, NULL, NULL);
+    ff_text_init_avio(NULL, r, &r->buf_pb);
 }
 
 int64_t ff_text_pos(FFTextReader *r)
@@ -145,14 +147,6 @@ AVPacket *ff_subtitles_queue_insert(FFDemuxSubtitlesQueue *q,
     return sub;
 }
 
-AVPacket *ff_subtitles_queue_insert_bprint(FFDemuxSubtitlesQueue *q,
-                                           const AVBPrint *event, int merge)
-{
-    if (!av_bprint_is_complete(event))
-        return NULL;
-    return ff_subtitles_queue_insert(q, event->str, event->len, merge);
-}
-
 static int cmp_pkt_sub_ts_pos(const void *a, const void *b)
 {
     const AVPacket *s1 = *(const AVPacket **)a;
@@ -212,7 +206,7 @@ void ff_subtitles_queue_finalize(void *log_ctx, FFDemuxSubtitlesQueue *q)
           q->sort == SUB_SORT_TS_POS ? cmp_pkt_sub_ts_pos
                                      : cmp_pkt_sub_pos_ts);
     for (i = 0; i < q->nb_subs; i++)
-        if (q->subs[i]->duration < 0 && i < q->nb_subs - 1 && q->subs[i + 1]->pts - (uint64_t)q->subs[i]->pts <= INT64_MAX)
+        if (q->subs[i]->duration < 0 && i < q->nb_subs - 1)
             q->subs[i]->duration = q->subs[i + 1]->pts - q->subs[i]->pts;
 
     if (!q->keep_duplicates)
@@ -320,27 +314,6 @@ void ff_subtitles_queue_clean(FFDemuxSubtitlesQueue *q)
     q->nb_subs = q->allocated_size = q->current_sub_idx = 0;
 }
 
-int ff_subtitles_read_packet(AVFormatContext *s, AVPacket *pkt)
-{
-    FFDemuxSubtitlesQueue *q = s->priv_data;
-    return ff_subtitles_queue_read_packet(q, pkt);
-}
-
-int ff_subtitles_read_seek(AVFormatContext *s, int stream_index,
-                           int64_t min_ts, int64_t ts, int64_t max_ts, int flags)
-{
-    FFDemuxSubtitlesQueue *q = s->priv_data;
-    return ff_subtitles_queue_seek(q, s, stream_index,
-                                   min_ts, ts, max_ts, flags);
-}
-
-int ff_subtitles_read_close(AVFormatContext *s)
-{
-    FFDemuxSubtitlesQueue *q = s->priv_data;
-    ff_subtitles_queue_clean(q);
-    return 0;
-}
-
 int ff_smil_extract_next_text_chunk(FFTextReader *tr, AVBPrint *buf, char *c)
 {
     int i = 0;
@@ -355,15 +328,13 @@ int ff_smil_extract_next_text_chunk(FFTextReader *tr, AVBPrint *buf, char *c)
     do {
         av_bprint_chars(buf, *c, 1);
         *c = ff_text_r8(tr);
-        if (i == INT_MAX)
-            return AVERROR_INVALIDDATA;
         i++;
     } while (*c != end_chr && *c);
     if (end_chr == '>') {
         av_bprint_chars(buf, '>', 1);
         *c = 0;
     }
-    return av_bprint_is_complete(buf) ? i : AVERROR(ENOMEM);
+    return i;
 }
 
 const char *ff_smil_get_attr_ptr(const char *s, const char *attr)
@@ -391,7 +362,7 @@ static inline int is_eol(char c)
     return c == '\r' || c == '\n';
 }
 
-int ff_subtitles_read_text_chunk(FFTextReader *tr, AVBPrint *buf)
+void ff_subtitles_read_text_chunk(FFTextReader *tr, AVBPrint *buf)
 {
     char eol_buf[5], last_was_cr = 0;
     int n = 0, i = 0, nb_eol = 0;
@@ -431,16 +402,15 @@ int ff_subtitles_read_text_chunk(FFTextReader *tr, AVBPrint *buf)
         av_bprint_chars(buf, c, 1);
         n++;
     }
-    return av_bprint_is_complete(buf) ? 0 : AVERROR(ENOMEM);
 }
 
-int ff_subtitles_read_chunk(AVIOContext *pb, AVBPrint *buf)
+void ff_subtitles_read_chunk(AVIOContext *pb, AVBPrint *buf)
 {
     FFTextReader tr;
     tr.buf_pos = tr.buf_len = 0;
     tr.type = 0;
     tr.pb = pb;
-    return ff_subtitles_read_text_chunk(&tr, buf);
+    ff_subtitles_read_text_chunk(&tr, buf);
 }
 
 ptrdiff_t ff_subtitles_read_line(FFTextReader *tr, char *buf, size_t size)
@@ -448,7 +418,6 @@ ptrdiff_t ff_subtitles_read_line(FFTextReader *tr, char *buf, size_t size)
     size_t cur = 0;
     if (!size)
         return 0;
-    buf[0] = '\0';
     while (cur + 1 < size) {
         unsigned char c = ff_text_r8(tr);
         if (!c)

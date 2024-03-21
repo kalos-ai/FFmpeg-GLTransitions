@@ -22,16 +22,8 @@
 #define AVFILTER_VIDEO_H
 
 #include "avfilter.h"
-#include "internal.h"
-
-/**
- * An AVFilterPad array whose only entry has name "default"
- * and is of type AVMEDIA_TYPE_VIDEO.
- */
-extern const AVFilterPad ff_video_default_filterpad[1];
 
 AVFrame *ff_default_get_video_buffer(AVFilterLink *link, int w, int h);
-AVFrame *ff_default_get_video_buffer2(AVFilterLink *link, int w, int h, int align);
 AVFrame *ff_null_get_video_buffer(AVFilterLink *link, int w, int h);
 
 /**
@@ -41,7 +33,8 @@ AVFrame *ff_null_get_video_buffer(AVFilterLink *link, int w, int h);
  *              be requested
  * @param w     the minimum width of the buffer to allocate
  * @param h     the minimum height of the buffer to allocate
- * @return      on success, an AVFrame owned by the caller, NULL on error
+ * @return      A reference to the buffer. This must be unreferenced with
+ *              avfilter_unref_buffer when you are finished with it.
  */
 AVFrame *ff_get_video_buffer(AVFilterLink *link, int w, int h);
 

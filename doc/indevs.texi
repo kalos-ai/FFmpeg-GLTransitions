@@ -222,8 +222,7 @@ $ ffmpeg -f avfoundation -capture_raw_data true -i "zr100:none" out.dv
 
 @section bktr
 
-BSD video input device. Deprecated and will be removed - please contact
-the developers if you are interested in maintaining it.
+BSD video input device.
 
 @subsection Options
 
@@ -345,22 +344,8 @@ Defines number of audio channels to capture. Must be @samp{2}, @samp{8} or @samp
 Defaults to @samp{2}.
 
 @item duplex_mode
-Sets the decklink device duplex/profile mode. Must be @samp{unset}, @samp{half}, @samp{full},
-@samp{one_sub_device_full}, @samp{one_sub_device_half}, @samp{two_sub_device_full},
-@samp{four_sub_device_half}
+Sets the decklink device duplex mode. Must be @samp{unset}, @samp{half} or @samp{full}.
 Defaults to @samp{unset}.
-
-Note: DeckLink SDK 11.0 have replaced the duplex property by a profile property.
-For the DeckLink Duo 2 and DeckLink Quad 2, a profile is shared between any 2
-sub-devices that utilize the same connectors. For the DeckLink 8K Pro, a profile
-is shared between all 4 sub-devices. So DeckLink 8K Pro support four profiles.
-
-Valid profile modes for DeckLink 8K Pro(with DeckLink SDK >= 11.0):
-@samp{one_sub_device_full}, @samp{one_sub_device_half}, @samp{two_sub_device_full},
-@samp{four_sub_device_half}
-
-Valid profile modes for DeckLink Quad 2 and DeckLink Duo 2:
-@samp{half}, @samp{full}
 
 @item timecode_format
 Timecode type to include in the frame and video stream metadata. Must be
@@ -626,12 +611,6 @@ Save the currently used video capture filter device and its
 parameters (if the filter supports it) to a file.
 If a file with the same name exists it will be overwritten.
 
-@item use_video_device_timestamps
-If set to @option{false}, the timestamp for video frames will be
-derived from the wallclock instead of the timestamp provided by
-the capture device. This allows working around devices that
-provide unreliable timestamps.
-
 @end table
 
 @subsection Examples
@@ -723,7 +702,7 @@ Win32 GDI-based screen capture device.
 
 This device allows you to capture a region of the display on Windows.
 
-Amongst options for the imput filenames are such elements as:
+There are two options for the input filename:
 @example
 desktop
 @end example
@@ -731,13 +710,9 @@ or
 @example
 title=@var{window_title}
 @end example
-or
-@example
-hwnd=@var{window_hwnd}
-@end example
 
 The first option will capture the entire desktop, or a fixed region of the
-desktop. The second and third options will instead capture the contents of a single
+desktop. The second option will instead capture the contents of a single
 window, regardless of its position on the screen.
 
 For example, to grab the entire desktop using @command{ffmpeg}:
@@ -996,8 +971,9 @@ This input device reads data from the open output pads of a libavfilter
 filtergraph.
 
 For each filtergraph open output, the input device will create a
-corresponding stream which is mapped to the generated output.
-The filtergraph is specified through the option @option{graph}.
+corresponding stream which is mapped to the generated output. Currently
+only video data is supported. The filtergraph is specified through the
+option @option{graph}.
 
 @subsection Options
 
@@ -1293,11 +1269,11 @@ Specify the samplerate in Hz, by default 48kHz is used.
 Specify the channels in use, by default 2 (stereo) is set.
 
 @item frame_size
-This option does nothing and is deprecated.
+Specify the number of bytes per frame, by default it is set to 1024.
 
 @item fragment_size
-Specify the size in bytes of the minimal buffering fragment in PulseAudio, it
-will affect the audio latency. By default it is set to 50 ms amount of data.
+Specify the minimal buffering fragment in PulseAudio, it will affect the
+audio latency. By default it is unset.
 
 @item wallclock
 Set the initial PTS using the current time. Default is 1.

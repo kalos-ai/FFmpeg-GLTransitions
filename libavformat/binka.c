@@ -20,7 +20,6 @@
 
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 static int binka_probe(const AVProbeData *p)
@@ -45,7 +44,7 @@ static int binka_read_header(AVFormatContext *s)
 
     st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id = AV_CODEC_ID_BINKAUDIO_DCT;
-    st->codecpar->ch_layout.nb_channels = avio_r8(pb);
+    st->codecpar->channels = avio_r8(pb);
     st->codecpar->sample_rate = avio_rl16(pb);
     st->duration = avio_rl32(pb);
 
@@ -90,12 +89,12 @@ static int binka_read_packet(AVFormatContext *s, AVPacket *pkt)
     return 0;
 }
 
-const FFInputFormat ff_binka_demuxer = {
-    .p.name         = "binka",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Bink Audio"),
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.extensions   = "binka",
+AVInputFormat ff_binka_demuxer = {
+    .name           = "binka",
+    .long_name      = NULL_IF_CONFIG_SMALL("Bink Audio"),
     .read_probe     = binka_probe,
     .read_header    = binka_read_header,
     .read_packet    = binka_read_packet,
+    .flags          = AVFMT_GENERIC_INDEX,
+    .extensions     = "binka",
 };

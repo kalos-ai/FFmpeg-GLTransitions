@@ -26,8 +26,6 @@
  * AC-3 encoder float/fixed template
  */
 
-#include "config_components.h"
-
 #include <stdint.h>
 
 #include "libavutil/attributes.h"
@@ -35,6 +33,7 @@
 #include "libavutil/mem_internal.h"
 
 #include "audiodsp.h"
+#include "internal.h"
 #include "ac3enc.h"
 #include "eac3enc.h"
 
@@ -98,8 +97,8 @@ static void apply_mdct(AC3EncodeContext *s)
                                          &input_samples[AC3_BLOCK_SIZE],
                                          s->mdct_window, AC3_BLOCK_SIZE);
 
-            s->tx_fn(s->tx, block->mdct_coef[ch+1],
-                     s->windowed_samples, sizeof(float));
+            s->mdct.mdct_calc(&s->mdct, block->mdct_coef[ch+1],
+                              s->windowed_samples);
         }
     }
 }
@@ -110,9 +109,9 @@ static void apply_mdct(AC3EncodeContext *s)
  */
 static void apply_channel_coupling(AC3EncodeContext *s)
 {
-    LOCAL_ALIGNED_32(CoefType, cpl_coords,      [AC3_MAX_BLOCKS], [AC3_MAX_CHANNELS][16]);
+    LOCAL_ALIGNED_16(CoefType, cpl_coords,      [AC3_MAX_BLOCKS], [AC3_MAX_CHANNELS][16]);
 #if AC3ENC_FLOAT
-    LOCAL_ALIGNED_32(int32_t, fixed_cpl_coords, [AC3_MAX_BLOCKS], [AC3_MAX_CHANNELS][16]);
+    LOCAL_ALIGNED_16(int32_t, fixed_cpl_coords, [AC3_MAX_BLOCKS], [AC3_MAX_CHANNELS][16]);
 #else
     int32_t (*fixed_cpl_coords)[AC3_MAX_CHANNELS][16] = cpl_coords;
 #endif
@@ -222,8 +221,6 @@ static void apply_channel_coupling(AC3EncodeContext *s)
             }
         }
     }
-
-    av_assert1(s->fbw_channels > 0);
 
     /* calculate final coupling coordinates, taking into account reusing of
        coordinates in successive blocks */

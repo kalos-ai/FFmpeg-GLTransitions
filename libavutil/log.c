@@ -32,11 +32,9 @@
 #if HAVE_IO_H
 #include <io.h>
 #endif
-#include <inttypes.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include "avutil.h"
 #include "bprint.h"
 #include "common.h"
 #include "internal.h"
@@ -47,7 +45,7 @@ static AVMutex mutex = AV_MUTEX_INITIALIZER;
 
 #define LINE_SZ 1024
 
-#if HAVE_VALGRIND_VALGRIND_H && CONFIG_VALGRIND_BACKTRACE
+#if HAVE_VALGRIND_VALGRIND_H
 #include <valgrind/valgrind.h>
 /* this is the log level at which valgrind will output a full backtrace */
 #define BACKTRACE_LOGLEVEL AV_LOG_ERROR
@@ -291,11 +289,6 @@ static const char *get_level_str(int level)
     }
 }
 
-static const char *item_name(void *obj, const AVClass *cls)
-{
-    return (cls->item_name ? cls->item_name : av_default_item_name)(obj);
-}
-
 static void format_line(void *avcl, int level, const char *fmt, va_list vl,
                         AVBPrint part[4], int *print_prefix, int type[2])
 {
@@ -312,12 +305,12 @@ static void format_line(void *avcl, int level, const char *fmt, va_list vl,
                                    avc->parent_log_context_offset);
             if (parent && *parent) {
                 av_bprintf(part+0, "[%s @ %p] ",
-                           item_name(parent, *parent), parent);
+                         (*parent)->item_name(parent), parent);
                 if(type) type[0] = get_category(parent);
             }
         }
         av_bprintf(part+1, "[%s @ %p] ",
-                   item_name(avcl, avc), avcl);
+                 avc->item_name(avcl), avcl);
         if(type) type[1] = get_category(avcl);
     }
 

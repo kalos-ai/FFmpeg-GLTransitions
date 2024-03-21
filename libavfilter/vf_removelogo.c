@@ -72,6 +72,7 @@
 #include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
 #include "video.h"
 #include "bbox.h"
@@ -200,6 +201,15 @@ static void convert_mask_to_strength_mask(uint8_t *data, int linesize,
     /* Apply the fudge factor to this number too, since we must ensure
      * that enough masks are generated. */
     *max_mask_size = apply_mask_fudge_factor(current_pass + 1);
+}
+
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE };
+    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+    if (!fmts_list)
+        return AVERROR(ENOMEM);
+    return ff_set_common_formats(ctx, fmts_list);
 }
 
 static int load_mask(uint8_t **mask, int *w, int *h,
@@ -552,17 +562,26 @@ static const AVFilterPad removelogo_inputs[] = {
         .config_props = config_props_input,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_removelogo = {
+static const AVFilterPad removelogo_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_removelogo = {
     .name          = "removelogo",
     .description   = NULL_IF_CONFIG_SMALL("Remove a TV logo based on a mask image."),
     .priv_size     = sizeof(RemovelogoContext),
     .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(removelogo_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_YUV420P),
+    .query_formats = query_formats,
+    .inputs        = removelogo_inputs,
+    .outputs       = removelogo_outputs,
     .priv_class    = &removelogo_class,
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
 };

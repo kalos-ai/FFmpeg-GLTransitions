@@ -18,15 +18,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
-#include "audio.h"
 #include "avfilter.h"
 #include "filters.h"
 #include "internal.h"
-#include "video.h"
 
 typedef struct CueContext {
     const AVClass *class;
@@ -98,29 +94,64 @@ static const AVOption options[] = {
     { NULL }
 };
 
-AVFILTER_DEFINE_CLASS_EXT(cue_acue, "(a)cue", options);
-
 #if CONFIG_CUE_FILTER
-const AVFilter ff_vf_cue = {
+#define cue_options options
+AVFILTER_DEFINE_CLASS(cue);
+
+static const AVFilterPad cue_inputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+static const AVFilterPad cue_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter ff_vf_cue = {
     .name        = "cue",
     .description = NULL_IF_CONFIG_SMALL("Delay filtering to match a cue."),
-    .priv_class  = &cue_acue_class,
     .priv_size   = sizeof(CueContext),
-    FILTER_INPUTS(ff_video_default_filterpad),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
+    .priv_class  = &cue_class,
+    .inputs      = cue_inputs,
+    .outputs     = cue_outputs,
     .activate    = activate,
 };
 #endif /* CONFIG_CUE_FILTER */
 
 #if CONFIG_ACUE_FILTER
-const AVFilter ff_af_acue = {
+#define acue_options options
+AVFILTER_DEFINE_CLASS(acue);
+
+static const AVFilterPad acue_inputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_AUDIO,
+    },
+    { NULL }
+};
+
+static const AVFilterPad acue_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_AUDIO,
+    },
+    { NULL }
+};
+
+AVFilter ff_af_acue = {
     .name        = "acue",
     .description = NULL_IF_CONFIG_SMALL("Delay filtering to match a cue."),
-    .priv_class  = &cue_acue_class,
     .priv_size   = sizeof(CueContext),
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
-    FILTER_INPUTS(ff_audio_default_filterpad),
-    FILTER_OUTPUTS(ff_audio_default_filterpad),
+    .priv_class  = &acue_class,
+    .inputs      = acue_inputs,
+    .outputs     = acue_outputs,
     .activate    = activate,
 };
 #endif /* CONFIG_ACUE_FILTER */

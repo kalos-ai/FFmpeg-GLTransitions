@@ -19,11 +19,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stddef.h>
-#include "libavutil/log.h"
-#include "libavutil/macros.h"
-#include "defs.h"
+#include "avcodec.h"
 #include "dnxhddata.h"
+#include "libavutil/common.h"
 
 /* The quantization tables below are in zigzag order! */
 
@@ -1085,7 +1083,7 @@ const CIDEntry *ff_dnxhd_get_cid_table(int cid)
     return NULL;
 }
 
-int ff_dnxhd_get_frame_size(int cid)
+int avpriv_dnxhd_get_frame_size(int cid)
 {
     const CIDEntry *entry = ff_dnxhd_get_cid_table(cid);
     if (!entry)
@@ -1093,7 +1091,7 @@ int ff_dnxhd_get_frame_size(int cid)
     return entry->frame_size;
 }
 
-int ff_dnxhd_get_hr_frame_size(int cid, int w, int h)
+int avpriv_dnxhd_get_hr_frame_size(int cid, int w, int h)
 {
     const CIDEntry *entry = ff_dnxhd_get_cid_table(cid);
     int result;
@@ -1107,18 +1105,26 @@ int ff_dnxhd_get_hr_frame_size(int cid, int w, int h)
     return FFMAX(result, 8192);
 }
 
+int avpriv_dnxhd_get_interlaced(int cid)
+{
+    const CIDEntry *entry = ff_dnxhd_get_cid_table(cid);
+    if (!entry)
+        return -1;
+    return entry->flags & DNXHD_INTERLACED ? 1 : 0;
+}
+
 static int dnxhd_find_hr_cid(AVCodecContext *avctx)
 {
     switch (avctx->profile) {
-    case AV_PROFILE_DNXHR_444:
+    case FF_PROFILE_DNXHR_444:
         return 1270;
-    case AV_PROFILE_DNXHR_HQX:
+    case FF_PROFILE_DNXHR_HQX:
         return 1271;
-    case AV_PROFILE_DNXHR_HQ:
+    case FF_PROFILE_DNXHR_HQ:
         return 1272;
-    case AV_PROFILE_DNXHR_SQ:
+    case FF_PROFILE_DNXHR_SQ:
         return 1273;
-    case AV_PROFILE_DNXHR_LB:
+    case FF_PROFILE_DNXHR_LB:
         return 1274;
     }
     return 0;
@@ -1129,7 +1135,7 @@ int ff_dnxhd_find_cid(AVCodecContext *avctx, int bit_depth)
     int i, j;
     int mbs = avctx->bit_rate / 1000000;
 
-    if (avctx->profile != AV_PROFILE_DNXHD)
+    if (avctx->profile != FF_PROFILE_DNXHD)
         return dnxhd_find_hr_cid(avctx);
 
     if (!mbs)

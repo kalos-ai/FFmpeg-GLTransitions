@@ -19,18 +19,20 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <time.h>
-
 #include "libavutil/attributes.h"
+#include "libavutil/avstring.h"
+#include "libavutil/bswap.h"
 #include "libavutil/common.h"
 #include "libavutil/dict.h"
 #include "libavutil/internal.h"
 #include "libavutil/mathematics.h"
+#include "libavutil/opt.h"
 #include "libavutil/time_internal.h"
 
 #include "avformat.h"
+#include "avio_internal.h"
 #include "avlanguage.h"
-#include "demux.h"
+#include "id3v2.h"
 #include "internal.h"
 #include "riff.h"
 #include "asf.h"
@@ -111,7 +113,6 @@ typedef struct ASFContext {
     int64_t data_offset;
     int64_t first_packet_offset; // packet offset
     int64_t unknown_offset;   // for top level header objects or subobjects without specified behavior
-    int in_asf_read_unknown;
 
     // ASF file must not contain more than 128 streams according to the specification
     ASFStream *asf_st[ASF_MAX_STREAMS];
@@ -176,7 +177,7 @@ static int asf_read_unknown(AVFormatContext *s, const GUIDParseTable *g)
     uint64_t size   = avio_rl64(pb);
     int ret;
 
-    if (size > INT64_MAX || asf->in_asf_read_unknown > 5)
+    if (size > INT64_MAX)
         return AVERROR_INVALIDDATA;
 
     if (asf->is_header)
@@ -185,11 +186,8 @@ static int asf_read_unknown(AVFormatContext *s, const GUIDParseTable *g)
     if (!g->is_subobject) {
         if (!(ret = strcmp(g->name, "Header Extension")))
             avio_skip(pb, 22); // skip reserved fields and Data Size
-        asf->in_asf_read_unknown ++;
-        ret = detect_unknown_subobject(s, asf->unknown_offset,
-                                            asf->unknown_size);
-        asf->in_asf_read_unknown --;
-        if (ret < 0)
+        if ((ret = detect_unknown_subobject(s, asf->unknown_offset,
+                                            asf->unknown_size)) < 0)
             return ret;
     } else {
         if (size < 24) {
@@ -358,6 +356,110 @@ static int asf_set_metadata(AVFormatContext *s, const uint8_t *name,
     return 0;
 }
 
+/* MSDN claims that this should be "compatible with the ID3 frame, APIC",
+ * but in reality this is only loosely similar */
+static int asf_read_picture(AVFormatContext *s, int len)
+{
+    AVPacket pkt          = { 0 };
+    const CodecMime *mime = ff_id3v2_mime_tags;
+    enum  AVCodecID id    = AV_CODEC_ID_NONE;
+    char mimetype[64];
+    uint8_t  *desc = NULL;
+    AVStream   *st = NULL;
+    int ret, type, picsize, desc_len;
+
+    /* type + picsize + mime + desc */
+    if (len < 1 + 4 + 2 + 2) {
+        av_log(s, AV_LOG_ERROR, "Invalid attached picture size: %d.\n", len);
+        return AVERROR_INVALIDDATA;
+    }
+
+    /* picture type */
+    type = avio_r8(s->pb);
+    len--;
+    if (type >= FF_ARRAY_ELEMS(ff_id3v2_picture_types) || type < 0) {
+        av_log(s, AV_LOG_WARNING, "Unknown attached picture type: %d.\n", type);
+        type = 0;
+    }
+
+    /* picture data size */
+    picsize = avio_rl32(s->pb);
+    len    -= 4;
+
+    /* picture MIME type */
+    len -= avio_get_str16le(s->pb, len, mimetype, sizeof(mimetype));
+    while (mime->id != AV_CODEC_ID_NONE) {
+        if (!strncmp(mime->str, mimetype, sizeof(mimetype))) {
+            id = mime->id;
+            break;
+        }
+        mime++;
+    }
+    if (id == AV_CODEC_ID_NONE) {
+        av_log(s, AV_LOG_ERROR, "Unknown attached picture mimetype: %s.\n",
+               mimetype);
+        return 0;
+    }
+
+    if (picsize >= len) {
+        av_log(s, AV_LOG_ERROR, "Invalid attached picture data size: %d >= %d.\n",
+               picsize, len);
+        return AVERROR_INVALIDDATA;
+    }
+
+    /* picture description */
+    desc_len = (len - picsize) * 2 + 1;
+    desc     = av_malloc(desc_len);
+    if (!desc)
+        return AVERROR(ENOMEM);
+    len -= avio_get_str16le(s->pb, len - picsize, desc, desc_len);
+
+    ret = av_get_packet(s->pb, &pkt, picsize);
+    if (ret < 0)
+        goto fail;
+
+    st  = avformat_new_stream(s, NULL);
+    if (!st) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    st->disposition              |= AV_DISPOSITION_ATTACHED_PIC;
+    st->codecpar->codec_type      = AVMEDIA_TYPE_VIDEO;
+    st->codecpar->codec_id        = id;
+    st->attached_pic              = pkt;
+    st->attached_pic.stream_index = st->index;
+    st->attached_pic.flags       |= AV_PKT_FLAG_KEY;
+
+    if (*desc) {
+        if (av_dict_set(&st->metadata, "title", desc, AV_DICT_DONT_STRDUP_VAL) < 0)
+            av_log(s, AV_LOG_WARNING, "av_dict_set failed.\n");
+    } else
+        av_freep(&desc);
+
+    if (av_dict_set(&st->metadata, "comment", ff_id3v2_picture_types[type], 0) < 0)
+        av_log(s, AV_LOG_WARNING, "av_dict_set failed.\n");
+
+    return 0;
+
+fail:
+    av_freep(&desc);
+    av_packet_unref(&pkt);
+    return ret;
+}
+
+static void get_id3_tag(AVFormatContext *s, int len)
+{
+    ID3v2ExtraMeta *id3v2_extra_meta = NULL;
+
+    ff_id3v2_read(s, ID3v2_DEFAULT_MAGIC, &id3v2_extra_meta, len);
+    if (id3v2_extra_meta) {
+        ff_id3v2_parse_apic(s, id3v2_extra_meta);
+        ff_id3v2_parse_chapters(s, id3v2_extra_meta);
+    }
+    ff_id3v2_free_extra_meta(&id3v2_extra_meta);
+}
+
 static int process_metadata(AVFormatContext *s, const uint8_t *name, uint16_t name_len,
                             uint16_t val_len, uint16_t type, AVDictionary **met)
 {
@@ -370,7 +472,11 @@ static int process_metadata(AVFormatContext *s, const uint8_t *name, uint16_t na
             asf_read_value(s, name, val_len, type, met);
             break;
         case ASF_BYTE_ARRAY:
-            if (ff_asf_handle_byte_array(s, name, val_len) > 0)
+            if (!strcmp(name, "WM/Picture")) // handle cover art
+                asf_read_picture(s, val_len);
+            else if (!strcmp(name, "ID3")) // handle ID3 tag
+                get_id3_tag(s, val_len);
+            else
                 asf_read_value(s, name, val_len, type, met);
             break;
         case ASF_GUID:
@@ -579,7 +685,7 @@ static int asf_read_properties(AVFormatContext *s, const GUIDParseTable *g)
     return 0;
 }
 
-static int parse_video_info(AVFormatContext *avfmt, AVIOContext *pb, AVStream *st)
+static int parse_video_info(AVIOContext *pb, AVStream *st)
 {
     uint16_t size_asf; // ASF-specific Format Data size
     uint32_t size_bmp; // BMP_HEADER-specific Format Data size
@@ -594,10 +700,19 @@ static int parse_video_info(AVFormatContext *avfmt, AVIOContext *pb, AVStream *s
     st->codecpar->codec_id  = ff_codec_get_id(ff_codec_bmp_tags, tag);
     size_bmp = FFMAX(size_asf, size_bmp);
 
-    if (size_bmp > BMP_HEADER_SIZE) {
-        int ret = ff_get_extradata(avfmt, st->codecpar, pb, size_bmp - BMP_HEADER_SIZE);
-
-        if (ret < 0)
+    if (size_bmp > BMP_HEADER_SIZE &&
+        size_bmp < INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) {
+        int ret;
+        st->codecpar->extradata_size  = size_bmp - BMP_HEADER_SIZE;
+        if (!(st->codecpar->extradata = av_malloc(st->codecpar->extradata_size +
+                                               AV_INPUT_BUFFER_PADDING_SIZE))) {
+            st->codecpar->extradata_size = 0;
+            return AVERROR(ENOMEM);
+        }
+        memset(st->codecpar->extradata + st->codecpar->extradata_size , 0,
+               AV_INPUT_BUFFER_PADDING_SIZE);
+        if ((ret = avio_read(pb, st->codecpar->extradata,
+                             st->codecpar->extradata_size)) < 0)
             return ret;
     }
     return 0;
@@ -680,7 +795,7 @@ static int asf_read_stream_properties(AVFormatContext *s, const GUIDParseTable *
         break;
     case AVMEDIA_TYPE_VIDEO:
         asf_st->type = AVMEDIA_TYPE_VIDEO;
-        if ((ret = parse_video_info(s, pb, st)) < 0)
+        if ((ret = parse_video_info(pb, st)) < 0)
             return ret;
         break;
     default:
@@ -890,8 +1005,6 @@ static int asf_read_simple_index(AVFormatContext *s, const GUIDParseTable *g)
             av_log(s, AV_LOG_ERROR, "Skipping failed in asf_read_simple_index.\n");
             return offset;
         }
-        if (asf->first_packet_offset > INT64_MAX - asf->packet_size * pkt_num)
-            return AVERROR_INVALIDDATA;
         if (prev_pkt_num != pkt_num) {
             av_add_index_entry(st, asf->first_packet_offset + asf->packet_size *
                                pkt_num, av_rescale(interval, i, 10000),
@@ -1246,8 +1359,6 @@ static int asf_read_packet_header(AVFormatContext *s)
     unsigned char error_flags, len_flags, pay_flags;
 
     asf->packet_offset = avio_tell(pb);
-    if (asf->packet_offset > INT64_MAX/2)
-        asf->packet_offset = 0;
     error_flags = avio_r8(pb); // read Error Correction Flags
     if (error_flags & ASF_PACKET_FLAG_ERROR_CORRECTION_PRESENT) {
         if (!(error_flags & ASF_ERROR_CORRECTION_LENGTH_TYPE)) {
@@ -1523,15 +1634,13 @@ static int asf_read_seek(AVFormatContext *s, int stream_index,
                          int64_t timestamp, int flags)
 {
     ASFContext *asf = s->priv_data;
-    AVStream *const st = s->streams[stream_index];
-    FFStream *const sti = ffstream(st);
     int idx, ret;
 
-    if (sti->nb_index_entries && asf->is_simple_index) {
-        idx = av_index_search_timestamp(st, timestamp, flags);
-        if (idx < 0 || idx >= sti->nb_index_entries)
+    if (s->streams[stream_index]->nb_index_entries && asf->is_simple_index) {
+        idx = av_index_search_timestamp(s->streams[stream_index], timestamp, flags);
+        if (idx < 0 || idx >= s->streams[stream_index]->nb_index_entries)
             return AVERROR_INVALIDDATA;
-        avio_seek(s->pb, sti->index_entries[idx].pos, SEEK_SET);
+        avio_seek(s->pb, s->streams[stream_index]->index_entries[idx].pos, SEEK_SET);
     } else {
         if ((ret = ff_seek_frame_binary(s, stream_index, timestamp, flags)) < 0)
             return ret;
@@ -1674,10 +1783,9 @@ failed:
     return ret;
 }
 
-const FFInputFormat ff_asf_o_demuxer = {
-    .p.name         = "asf_o",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("ASF (Advanced / Active Streaming Format)"),
-    .p.flags        = AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH,
+AVInputFormat ff_asf_o_demuxer = {
+    .name           = "asf_o",
+    .long_name      = NULL_IF_CONFIG_SMALL("ASF (Advanced / Active Streaming Format)"),
     .priv_data_size = sizeof(ASFContext),
     .read_probe     = asf_probe,
     .read_header    = asf_read_header,
@@ -1685,4 +1793,5 @@ const FFInputFormat ff_asf_o_demuxer = {
     .read_close     = asf_read_close,
     .read_timestamp = asf_read_timestamp,
     .read_seek      = asf_read_seek,
+    .flags          = AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH,
 };

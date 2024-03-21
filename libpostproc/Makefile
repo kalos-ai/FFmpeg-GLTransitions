@@ -4,10 +4,8 @@ FFLIBS = avutil
 
 HEADERS = postprocess.h        \
           version.h            \
-          version_major.h      \
 
-OBJS = postprocess.o           \
-       version.o               \
+OBJS = postprocess.o
 
 # Windows resource file
-SHLIBOBJS-$(HAVE_GNU_WINDRES) += postprocres.o
+SLIBOBJS-$(HAVE_GNU_WINDRES) += postprocres.o

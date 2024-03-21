@@ -21,6 +21,7 @@
 #include "cbs.h"
 #include "cbs_internal.h"
 #include "cbs_vp9.h"
+#include "internal.h"
 
 
 static int cbs_vp9_read_s(CodedBitstreamContext *ctx, GetBitContext *gbc,
@@ -28,10 +29,11 @@ static int cbs_vp9_read_s(CodedBitstreamContext *ctx, GetBitContext *gbc,
                           const int *subscripts, int32_t *write_to)
 {
     uint32_t magnitude;
-    int sign;
+    int position, sign;
     int32_t value;
 
-    CBS_TRACE_READ_START();
+    if (ctx->trace_enable)
+        position = get_bits_count(gbc);
 
     if (get_bits_left(gbc) < width + 1) {
         av_log(ctx->log_ctx, AV_LOG_ERROR, "Invalid signed value at "
@@ -43,7 +45,17 @@ static int cbs_vp9_read_s(CodedBitstreamContext *ctx, GetBitContext *gbc,
     sign      = get_bits1(gbc);
     value     = sign ? -(int32_t)magnitude : magnitude;
 
-    CBS_TRACE_READ_END();
+    if (ctx->trace_enable) {
+        char bits[33];
+        int i;
+        for (i = 0; i < width; i++)
+            bits[i] = magnitude >> (width - i - 1) & 1 ? '1' : '0';
+        bits[i] = sign ? '1' : '0';
+        bits[i + 1] = 0;
+
+        ff_cbs_trace_syntax_element(ctx, position, name, subscripts,
+                                    bits, value);
+    }
 
     *write_to = value;
     return 0;
@@ -56,18 +68,26 @@ static int cbs_vp9_write_s(CodedBitstreamContext *ctx, PutBitContext *pbc,
     uint32_t magnitude;
     int sign;
 
-    CBS_TRACE_WRITE_START();
-
     if (put_bits_left(pbc) < width + 1)
         return AVERROR(ENOSPC);
 
     sign      = value < 0;
     magnitude = sign ? -value : value;
 
+    if (ctx->trace_enable) {
+        char bits[33];
+        int i;
+        for (i = 0; i < width; i++)
+            bits[i] = magnitude >> (width - i - 1) & 1 ? '1' : '0';
+        bits[i] = sign ? '1' : '0';
+        bits[i + 1] = 0;
+
+        ff_cbs_trace_syntax_element(ctx, put_bits_count(pbc),
+                                    name, subscripts, bits, value);
+    }
+
     put_bits(pbc, width, magnitude);
     put_bits(pbc, 1, sign);
-
-    CBS_TRACE_WRITE_END();
 
     return 0;
 }
@@ -77,24 +97,32 @@ static int cbs_vp9_read_increment(CodedBitstreamContext *ctx, GetBitContext *gbc
                                   const char *name, uint32_t *write_to)
 {
     uint32_t value;
+    int position, i;
+    char bits[8];
 
-    CBS_TRACE_READ_START();
+    av_assert0(range_min <= range_max && range_max - range_min < sizeof(bits) - 1);
+    if (ctx->trace_enable)
+        position = get_bits_count(gbc);
 
-    av_assert0(range_min <= range_max && range_max - range_min < 32);
-
-    for (value = range_min; value < range_max;) {
+    for (i = 0, value = range_min; value < range_max;) {
         if (get_bits_left(gbc) < 1) {
             av_log(ctx->log_ctx, AV_LOG_ERROR, "Invalid increment value at "
                    "%s: bitstream ended.\n", name);
             return AVERROR_INVALIDDATA;
         }
-        if (get_bits1(gbc))
+        if (get_bits1(gbc)) {
+            bits[i++] = '1';
             ++value;
-        else
+        } else {
+            bits[i++] = '0';
             break;
+        }
     }
 
-    CBS_TRACE_READ_END_NO_SUBSCRIPTS();
+    if (ctx->trace_enable) {
+        bits[i] = 0;
+        ff_cbs_trace_syntax_element(ctx, position, name, NULL, bits, value);
+    }
 
     *write_to = value;
     return 0;
@@ -105,8 +133,6 @@ static int cbs_vp9_write_increment(CodedBitstreamContext *ctx, PutBitContext *pb
                                    const char *name, uint32_t value)
 {
     int len;
-
-    CBS_TRACE_WRITE_START();
 
     av_assert0(range_min <= range_max && range_max - range_min < 8);
     if (value < range_min || value > range_max) {
@@ -123,10 +149,22 @@ static int cbs_vp9_write_increment(CodedBitstreamContext *ctx, PutBitContext *pb
     if (put_bits_left(pbc) < len)
         return AVERROR(ENOSPC);
 
+    if (ctx->trace_enable) {
+        char bits[8];
+        int i;
+        for (i = 0; i < len; i++) {
+            if (range_min + i == value)
+                bits[i] = '0';
+            else
+                bits[i] = '1';
+        }
+        bits[i] = 0;
+        ff_cbs_trace_syntax_element(ctx, put_bits_count(pbc),
+                                    name, NULL, bits, value);
+    }
+
     if (len > 0)
         put_bits(pbc, len, (1 << len) - 1 - (value != range_max));
-
-    CBS_TRACE_WRITE_END_NO_SUBSCRIPTS();
 
     return 0;
 }
@@ -136,11 +174,12 @@ static int cbs_vp9_read_le(CodedBitstreamContext *ctx, GetBitContext *gbc,
                            const int *subscripts, uint32_t *write_to)
 {
     uint32_t value;
-    int b;
-
-    CBS_TRACE_READ_START();
+    int position, b;
 
     av_assert0(width % 8 == 0);
+
+    if (ctx->trace_enable)
+        position = get_bits_count(gbc);
 
     if (get_bits_left(gbc) < width) {
         av_log(ctx->log_ctx, AV_LOG_ERROR, "Invalid le value at "
@@ -152,7 +191,17 @@ static int cbs_vp9_read_le(CodedBitstreamContext *ctx, GetBitContext *gbc,
     for (b = 0; b < width; b += 8)
         value |= get_bits(gbc, 8) << b;
 
-    CBS_TRACE_READ_END();
+    if (ctx->trace_enable) {
+        char bits[33];
+        int i;
+        for (b = 0; b < width; b += 8)
+            for (i = 0; i < 8; i++)
+                bits[b + i] = value >> (b + i) & 1 ? '1' : '0';
+        bits[b] = 0;
+
+        ff_cbs_trace_syntax_element(ctx, position, name, subscripts,
+                                    bits, value);
+    }
 
     *write_to = value;
     return 0;
@@ -164,17 +213,25 @@ static int cbs_vp9_write_le(CodedBitstreamContext *ctx, PutBitContext *pbc,
 {
     int b;
 
-    CBS_TRACE_WRITE_START();
-
     av_assert0(width % 8 == 0);
 
     if (put_bits_left(pbc) < width)
         return AVERROR(ENOSPC);
 
+    if (ctx->trace_enable) {
+        char bits[33];
+        int i;
+        for (b = 0; b < width; b += 8)
+            for (i = 0; i < 8; i++)
+                bits[b + i] = value >> (b + i) & 1 ? '1' : '0';
+        bits[b] = 0;
+
+        ff_cbs_trace_syntax_element(ctx, put_bits_count(pbc),
+                                    name, subscripts, bits, value);
+    }
+
     for (b = 0; b < width; b += 8)
         put_bits(pbc, 8, value >> b & 0xff);
-
-    CBS_TRACE_WRITE_END();
 
     return 0;
 }
@@ -195,6 +252,8 @@ static int cbs_vp9_write_le(CodedBitstreamContext *ctx, PutBitContext *pbc,
 
 #define SUBSCRIPTS(subs, ...) (subs > 0 ? ((int[subs + 1]){ subs, __VA_ARGS__ }) : NULL)
 
+#define f(width, name) \
+        xf(width, name, current->name, 0, )
 #define s(width, name) \
         xs(width, name, current->name, 0, )
 #define fs(width, name, subs, ...) \
@@ -206,12 +265,6 @@ static int cbs_vp9_write_le(CodedBitstreamContext *ctx, PutBitContext *pbc,
 #define READWRITE read
 #define RWContext GetBitContext
 
-#define f(width, name) do { \
-        uint32_t value; \
-        CHECK(ff_cbs_read_simple_unsigned(ctx, rw, width, #name, \
-                                          &value)); \
-        current->name = value; \
-    } while (0)
 #define xf(width, name, var, subs, ...) do { \
         uint32_t value; \
         CHECK(ff_cbs_read_unsigned(ctx, rw, width, #name, \
@@ -277,7 +330,6 @@ static int cbs_vp9_write_le(CodedBitstreamContext *ctx, PutBitContext *pbc,
 #undef READ
 #undef READWRITE
 #undef RWContext
-#undef f
 #undef xf
 #undef xs
 #undef increment
@@ -293,10 +345,6 @@ static int cbs_vp9_write_le(CodedBitstreamContext *ctx, PutBitContext *pbc,
 #define READWRITE write
 #define RWContext PutBitContext
 
-#define f(width, name) do { \
-        CHECK(ff_cbs_write_simple_unsigned(ctx, rw, width, #name, \
-                                           current->name)); \
-    } while (0)
 #define xf(width, name, var, subs, ...) do { \
         CHECK(ff_cbs_write_unsigned(ctx, rw, width, #name, \
                                     SUBSCRIPTS(subs, __VA_ARGS__), \
@@ -349,7 +397,6 @@ static int cbs_vp9_write_le(CodedBitstreamContext *ctx, PutBitContext *pbc,
 #undef WRITE
 #undef READWRITE
 #undef RWContext
-#undef f
 #undef xf
 #undef xs
 #undef increment
@@ -404,7 +451,7 @@ static int cbs_vp9_split_fragment(CodedBitstreamContext *ctx,
                 return AVERROR_INVALIDDATA;
             }
 
-            err = ff_cbs_append_unit_data(frag, 0,
+            err = ff_cbs_insert_unit_data(frag, -1, 0,
                                           frag->data + pos,
                                           sfi.frame_sizes[i],
                                           frag->data_ref);
@@ -422,7 +469,7 @@ static int cbs_vp9_split_fragment(CodedBitstreamContext *ctx,
         return 0;
 
     } else {
-        err = ff_cbs_append_unit_data(frag, 0,
+        err = ff_cbs_insert_unit_data(frag, -1, 0,
                                       frag->data, frag->data_size,
                                       frag->data_ref);
         if (err < 0)
@@ -443,7 +490,7 @@ static int cbs_vp9_read_unit(CodedBitstreamContext *ctx,
     if (err < 0)
         return err;
 
-    err = ff_cbs_alloc_unit_content(ctx, unit);
+    err = ff_cbs_alloc_unit_content2(ctx, unit);
     if (err < 0)
         return err;
     frame = unit->content;

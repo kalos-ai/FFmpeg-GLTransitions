@@ -23,8 +23,6 @@
  * Set timebase for the output link.
  */
 
-#include "config_components.h"
-
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -128,7 +126,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     AVFilterLink *outlink = ctx->outputs[0];
 
     frame->pts = rescale_pts(inlink, outlink, frame->pts);
-    frame->duration = av_rescale_q(frame->duration, inlink->time_base, outlink->time_base);
 
     return ff_filter_frame(outlink, frame);
 }
@@ -165,23 +162,31 @@ static int activate(AVFilterContext *ctx)
 DEFINE_OPTIONS(settb, VIDEO);
 AVFILTER_DEFINE_CLASS(settb);
 
+static const AVFilterPad avfilter_vf_settb_inputs[] = {
+    {
+        .name         = "default",
+        .type         = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
 static const AVFilterPad avfilter_vf_settb_outputs[] = {
     {
         .name         = "default",
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_output_props,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_settb = {
+AVFilter ff_vf_settb = {
     .name        = "settb",
     .description = NULL_IF_CONFIG_SMALL("Set timebase for the video output link."),
     .priv_size   = sizeof(SetTBContext),
     .priv_class  = &settb_class,
-    FILTER_INPUTS(ff_video_default_filterpad),
-    FILTER_OUTPUTS(avfilter_vf_settb_outputs),
+    .inputs      = avfilter_vf_settb_inputs,
+    .outputs     = avfilter_vf_settb_outputs,
     .activate    = activate,
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
 };
 #endif /* CONFIG_SETTB_FILTER */
 
@@ -190,22 +195,30 @@ const AVFilter ff_vf_settb = {
 DEFINE_OPTIONS(asettb, AUDIO);
 AVFILTER_DEFINE_CLASS(asettb);
 
+static const AVFilterPad avfilter_af_asettb_inputs[] = {
+    {
+        .name         = "default",
+        .type         = AVMEDIA_TYPE_AUDIO,
+    },
+    { NULL }
+};
+
 static const AVFilterPad avfilter_af_asettb_outputs[] = {
     {
         .name         = "default",
         .type         = AVMEDIA_TYPE_AUDIO,
         .config_props = config_output_props,
     },
+    { NULL }
 };
 
-const AVFilter ff_af_asettb = {
+AVFilter ff_af_asettb = {
     .name        = "asettb",
     .description = NULL_IF_CONFIG_SMALL("Set timebase for the audio output link."),
     .priv_size   = sizeof(SetTBContext),
-    FILTER_INPUTS(ff_audio_default_filterpad),
-    FILTER_OUTPUTS(avfilter_af_asettb_outputs),
+    .inputs      = avfilter_af_asettb_inputs,
+    .outputs     = avfilter_af_asettb_outputs,
     .priv_class  = &asettb_class,
     .activate    = activate,
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
 };
 #endif /* CONFIG_ASETTB_FILTER */

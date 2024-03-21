@@ -20,8 +20,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include <stdint.h>
 #include <string.h>
 
@@ -33,14 +31,11 @@
 #include "libavutil/internal.h"
 
 #include "avcodec.h"
-#include "codec_internal.h"
 #include "decode.h"
 #include "h264_parse.h"
-#include "h264_ps.h"
 #include "hevc_parse.h"
 #include "hwconfig.h"
 #include "internal.h"
-#include "jni.h"
 #include "mediacodec_wrapper.h"
 #include "mediacodecdec_common.h"
 
@@ -55,7 +50,6 @@ typedef struct MediaCodecH264DecContext {
     int delay_flush;
     int amlogic_mpeg2_api23_workaround;
 
-    int use_ndk_codec;
 } MediaCodecH264DecContext;
 
 static av_cold int mediacodec_decode_close(AVCodecContext *avctx)
@@ -146,23 +140,20 @@ static int h264_set_extradata(AVCodecContext *avctx, FFAMediaFormat *format)
 
     for (i = 0; i < MAX_PPS_COUNT; i++) {
         if (ps.pps_list[i]) {
-            pps = ps.pps_list[i];
+            pps = (const PPS*)ps.pps_list[i]->data;
             break;
         }
     }
 
     if (pps) {
         if (ps.sps_list[pps->sps_id]) {
-            sps = ps.sps_list[pps->sps_id];
+            sps = (const SPS*)ps.sps_list[pps->sps_id]->data;
         }
     }
 
     if (pps && sps) {
         uint8_t *data = NULL;
         int data_size = 0;
-
-        avctx->profile = ff_h264_get_profile(sps);
-        avctx->level = sps->level_idc;
 
         if ((ret = h2645_ps_to_nalu(sps->data, sps->data_size, &data, &data_size)) < 0) {
             goto done;
@@ -223,30 +214,27 @@ static int hevc_set_extradata(AVCodecContext *avctx, FFAMediaFormat *format)
 
     for (i = 0; i < HEVC_MAX_VPS_COUNT; i++) {
         if (ps.vps_list[i]) {
-            vps = ps.vps_list[i];
+            vps = (const HEVCVPS*)ps.vps_list[i]->data;
             break;
         }
     }
 
     for (i = 0; i < HEVC_MAX_PPS_COUNT; i++) {
         if (ps.pps_list[i]) {
-            pps = ps.pps_list[i];
+            pps = (const HEVCPPS*)ps.pps_list[i]->data;
             break;
         }
     }
 
     if (pps) {
         if (ps.sps_list[pps->sps_id]) {
-            sps = ps.sps_list[pps->sps_id];
+            sps = (const HEVCSPS*)ps.sps_list[pps->sps_id]->data;
         }
     }
 
     if (vps && pps && sps) {
         uint8_t *data;
         int data_size;
-
-        avctx->profile = sps->ptl.general_ptl.profile_idc;
-        avctx->level   = sps->ptl.general_ptl.level_idc;
 
         if ((ret = h2645_ps_to_nalu(vps->data, vps->data_size, &vps_data, &vps_data_size)) < 0 ||
             (ret = h2645_ps_to_nalu(sps->data, sps->data_size, &sps_data, &sps_data_size)) < 0 ||
@@ -289,8 +277,7 @@ done:
 #if CONFIG_MPEG2_MEDIACODEC_DECODER || \
     CONFIG_MPEG4_MEDIACODEC_DECODER || \
     CONFIG_VP8_MEDIACODEC_DECODER   || \
-    CONFIG_VP9_MEDIACODEC_DECODER   || \
-    CONFIG_AV1_MEDIACODEC_DECODER
+    CONFIG_VP9_MEDIACODEC_DECODER
 static int common_set_extradata(AVCodecContext *avctx, FFAMediaFormat *format)
 {
     int ret = 0;
@@ -313,10 +300,7 @@ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
     FFAMediaFormat *format = NULL;
     MediaCodecH264DecContext *s = avctx->priv_data;
 
-    if (s->use_ndk_codec < 0)
-        s->use_ndk_codec = !av_jni_get_java_vm(avctx);
-
-    format = ff_AMediaFormat_new(s->use_ndk_codec);
+    format = ff_AMediaFormat_new();
     if (!format) {
         av_log(avctx, AV_LOG_ERROR, "Failed to create media format\n");
         ret = AVERROR_EXTERNAL;
@@ -324,15 +308,6 @@ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
     }
 
     switch (avctx->codec_id) {
-#if CONFIG_AV1_MEDIACODEC_DECODER
-    case AV_CODEC_ID_AV1:
-        codec_mime = "video/av01";
-
-        ret = common_set_extradata(avctx, format);
-        if (ret < 0)
-            goto done;
-        break;
-#endif
 #if CONFIG_H264_MEDIACODEC_DECODER
     case AV_CODEC_ID_H264:
         codec_mime = "video/avc";
@@ -403,7 +378,6 @@ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
     }
 
     s->ctx->delay_flush = s->delay_flush;
-    s->ctx->use_ndk_codec = s->use_ndk_codec;
 
     if ((ret = ff_mediacodec_dec_init(avctx, s->ctx, codec_mime, format)) < 0) {
         s->ctx = NULL;
@@ -415,13 +389,7 @@ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
            s->ctx->codec_name, ret);
 
     sdk_int = ff_Build_SDK_INT(avctx);
-    /* ff_Build_SDK_INT can fail when target API < 24 and JVM isn't available.
-     * If we don't check sdk_int > 0, the workaround might be enabled by
-     * mistake.
-     * JVM is required to make the workaround works reliably. On the other hand,
-     * missing a workaround should not be a serious issue, we do as best we can.
-     */
-    if (sdk_int > 0 && sdk_int <= 23 &&
+    if (sdk_int <= 23 &&
         strcmp(s->ctx->codec_name, "OMX.amlogic.mpeg2.decoder.awesome") == 0) {
         av_log(avctx, AV_LOG_INFO, "Enabling workaround for %s on API=%d\n",
                s->ctx->codec_name, sdk_int);
@@ -466,16 +434,7 @@ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
             index = ff_AMediaCodec_dequeueInputBuffer(s->ctx->codec, 0);
             if (index < 0) {
                 /* no space, block for an output frame to appear */
-                ret = ff_mediacodec_dec_receive(avctx, s->ctx, frame, true);
-                /* Try again if both input port and output port return EAGAIN.
-                 * If no data is consumed and no frame in output, it can make
-                 * both avcodec_send_packet() and avcodec_receive_frame()
-                 * return EAGAIN, which violate the design.
-                 */
-                if (ff_AMediaCodec_infoTryAgainLater(s->ctx->codec, index) &&
-                    ret == AVERROR(EAGAIN))
-                    continue;
-                return ret;
+                return ff_mediacodec_dec_receive(avctx, s->ctx, frame, true);
             }
             s->ctx->current_input_buffer = index;
         }
@@ -550,8 +509,6 @@ static const AVCodecHWConfigInternal *const mediacodec_hw_configs[] = {
 static const AVOption ff_mediacodec_vdec_options[] = {
     { "delay_flush", "Delay flush until hw output buffers are returned to the decoder",
                      OFFSET(delay_flush), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, VD },
-    { "ndk_codec", "Use MediaCodec from NDK",
-                   OFFSET(use_ndk_codec), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VD },
     { NULL }
 };
 
@@ -565,22 +522,22 @@ static const AVClass ff_##short_name##_mediacodec_dec_class = { \
 
 #define DECLARE_MEDIACODEC_VDEC(short_name, full_name, codec_id, bsf)                          \
 DECLARE_MEDIACODEC_VCLASS(short_name)                                                          \
-const FFCodec ff_ ## short_name ## _mediacodec_decoder = {                                     \
-    .p.name         = #short_name "_mediacodec",                                               \
-    CODEC_LONG_NAME(full_name " Android MediaCodec decoder"),                                  \
-    .p.type         = AVMEDIA_TYPE_VIDEO,                                                      \
-    .p.id           = codec_id,                                                                \
-    .p.priv_class   = &ff_##short_name##_mediacodec_dec_class,                                 \
+AVCodec ff_##short_name##_mediacodec_decoder = {                                               \
+    .name           = #short_name "_mediacodec",                                               \
+    .long_name      = NULL_IF_CONFIG_SMALL(full_name " Android MediaCodec decoder"),           \
+    .type           = AVMEDIA_TYPE_VIDEO,                                                      \
+    .id             = codec_id,                                                                \
+    .priv_class     = &ff_##short_name##_mediacodec_dec_class,                                 \
     .priv_data_size = sizeof(MediaCodecH264DecContext),                                        \
     .init           = mediacodec_decode_init,                                                  \
-    FF_CODEC_RECEIVE_FRAME_CB(mediacodec_receive_frame),                                       \
+    .receive_frame  = mediacodec_receive_frame,                                                \
     .flush          = mediacodec_decode_flush,                                                 \
     .close          = mediacodec_decode_close,                                                 \
-    .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
-    .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE,                                        \
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
+    .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS,                                               \
     .bsfs           = bsf,                                                                     \
     .hw_configs     = mediacodec_hw_configs,                                                   \
-    .p.wrapper_name = "mediacodec",                                                            \
+    .wrapper_name   = "mediacodec",                                                            \
 };                                                                                             \
 
 #if CONFIG_H264_MEDIACODEC_DECODER
@@ -605,8 +562,4 @@ DECLARE_MEDIACODEC_VDEC(vp8, "VP8", AV_CODEC_ID_VP8, NULL)
 
 #if CONFIG_VP9_MEDIACODEC_DECODER
 DECLARE_MEDIACODEC_VDEC(vp9, "VP9", AV_CODEC_ID_VP9, NULL)
-#endif
-
-#if CONFIG_AV1_MEDIACODEC_DECODER
-DECLARE_MEDIACODEC_VDEC(av1, "AV1", AV_CODEC_ID_AV1, NULL)
 #endif

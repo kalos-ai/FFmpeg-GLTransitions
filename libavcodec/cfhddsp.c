@@ -20,6 +20,7 @@
 
 #include "libavutil/attributes.h"
 #include "libavutil/common.h"
+#include "libavutil/avassert.h"
 
 #include "cfhddsp.h"
 
@@ -112,7 +113,6 @@ av_cold void ff_cfhddsp_init(CFHDDSPContext *c, int depth, int bayer)
     else
         c->horiz_filter_clip = horiz_filter_clip;
 
-#if ARCH_X86
-    ff_cfhddsp_init_x86(c, depth, bayer);
-#endif
+    if (ARCH_X86)
+        ff_cfhddsp_init_x86(c, depth, bayer);
 }

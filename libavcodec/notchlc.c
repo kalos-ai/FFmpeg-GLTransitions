@@ -20,14 +20,15 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define BITSTREAM_READER_LE
+#include "libavutil/intreadwrite.h"
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
 #include "lzf.h"
 #include "thread.h"
 
@@ -76,13 +77,12 @@ static int lz4_decompress(AVCodecContext *avctx,
                           GetByteContext *gb,
                           PutByteContext *pb)
 {
-    unsigned reference_pos, delta, pos = 0;
+    unsigned reference_pos, match_length, delta, pos = 0;
     uint8_t history[64 * 1024];
-    int match_length;
 
     while (bytestream2_get_bytes_left(gb) > 0) {
         uint8_t token = bytestream2_get_byte(gb);
-        int num_literals = token >> 4;
+        unsigned num_literals = token >> 4;
 
         if (num_literals == 15) {
             unsigned char current;
@@ -146,7 +146,7 @@ static int lz4_decompress(AVCodecContext *avctx,
     return bytestream2_tell_p(pb);
 }
 
-static int decode_blocks(AVCodecContext *avctx, AVFrame *p,
+static int decode_blocks(AVCodecContext *avctx, AVFrame *p, ThreadFrame *frame,
                          unsigned uncompressed_size)
 {
     NotchLCContext *s = avctx->priv_data;
@@ -221,7 +221,7 @@ static int decode_blocks(AVCodecContext *avctx, AVFrame *p,
         return AVERROR_INVALIDDATA;
     s->uv_count_offset = s->y_data_offset - s->a_data_offset;
 
-    if ((ret = ff_thread_get_buffer(avctx, p, 0)) < 0)
+    if ((ret = ff_thread_get_buffer(avctx, frame, 0)) < 0)
         return ret;
 
     rgb = *gb;
@@ -459,13 +459,16 @@ static int decode_blocks(AVCodecContext *avctx, AVFrame *p,
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *p,
-                        int *got_frame, AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx,
+                        void *data, int *got_frame,
+                        AVPacket *avpkt)
 {
     NotchLCContext *s = avctx->priv_data;
+    ThreadFrame frame = { .f = data };
     GetByteContext *gb = &s->gb;
     PutByteContext *pb = &s->pb;
     unsigned uncompressed_size;
+    AVFrame *p = data;
     int ret;
 
     if (avpkt->size <= 40)
@@ -510,12 +513,12 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *p,
         bytestream2_init(gb, s->uncompressed_buffer, uncompressed_size);
     }
 
-    ret = decode_blocks(avctx, p, uncompressed_size);
+    ret = decode_blocks(avctx, p, &frame, uncompressed_size);
     if (ret < 0)
         return ret;
 
     p->pict_type = AV_PICTURE_TYPE_I;
-    p->flags |= AV_FRAME_FLAG_KEY;
+    p->key_frame = 1;
 
     *got_frame = 1;
 
@@ -534,14 +537,14 @@ static av_cold int decode_end(AVCodecContext *avctx)
     return 0;
 }
 
-const FFCodec ff_notchlc_decoder = {
-    .p.name           = "notchlc",
-    CODEC_LONG_NAME("NotchLC"),
-    .p.type           = AVMEDIA_TYPE_VIDEO,
-    .p.id             = AV_CODEC_ID_NOTCHLC,
+AVCodec ff_notchlc_decoder = {
+    .name             = "notchlc",
+    .long_name        = NULL_IF_CONFIG_SMALL("NotchLC"),
+    .type             = AVMEDIA_TYPE_VIDEO,
+    .id               = AV_CODEC_ID_NOTCHLC,
     .priv_data_size   = sizeof(NotchLCContext),
     .init             = decode_init,
     .close            = decode_end,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
+    .decode           = decode_frame,
+    .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
 };

@@ -17,6 +17,7 @@
  */
 
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 
@@ -93,7 +94,7 @@ static int xfade_opencl_load(AVFilterContext *avctx,
     if (ctx->transition == CUSTOM) {
         err = ff_opencl_filter_load_program_from_file(avctx, ctx->source_file);
     } else {
-        err = ff_opencl_filter_load_program(avctx, &ff_source_xfade_cl, 1);
+        err = ff_opencl_filter_load_program(avctx, &ff_opencl_source_xfade, 1);
     }
     if (err < 0)
         return err;
@@ -378,17 +379,17 @@ static AVFrame *get_video_buffer(AVFilterLink *inlink, int w, int h)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
 
 static const AVOption xfade_opencl_options[] = {
-    { "transition", "set cross fade transition", OFFSET(transition), AV_OPT_TYPE_INT, {.i64=1}, 0, NB_TRANSITIONS-1, FLAGS, .unit = "transition" },
-    {   "custom",    "custom transition",     0, AV_OPT_TYPE_CONST, {.i64=CUSTOM},    0, 0, FLAGS, .unit = "transition" },
-    {   "fade",      "fade transition",       0, AV_OPT_TYPE_CONST, {.i64=FADE},      0, 0, FLAGS, .unit = "transition" },
-    {   "wipeleft",  "wipe left transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPELEFT},  0, 0, FLAGS, .unit = "transition" },
-    {   "wiperight", "wipe right transition", 0, AV_OPT_TYPE_CONST, {.i64=WIPERIGHT}, 0, 0, FLAGS, .unit = "transition" },
-    {   "wipeup",    "wipe up transition",    0, AV_OPT_TYPE_CONST, {.i64=WIPEUP},    0, 0, FLAGS, .unit = "transition" },
-    {   "wipedown",  "wipe down transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPEDOWN},  0, 0, FLAGS, .unit = "transition" },
-    {   "slideleft",  "slide left transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDELEFT},  0, 0, FLAGS, .unit = "transition" },
-    {   "slideright", "slide right transition", 0, AV_OPT_TYPE_CONST, {.i64=SLIDERIGHT}, 0, 0, FLAGS, .unit = "transition" },
-    {   "slideup",    "slide up transition",    0, AV_OPT_TYPE_CONST, {.i64=SLIDEUP},    0, 0, FLAGS, .unit = "transition" },
-    {   "slidedown",  "slide down transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDEDOWN},  0, 0, FLAGS, .unit = "transition" },
+    { "transition", "set cross fade transition", OFFSET(transition), AV_OPT_TYPE_INT, {.i64=1}, 0, NB_TRANSITIONS-1, FLAGS, "transition" },
+    {   "custom",    "custom transition",     0, AV_OPT_TYPE_CONST, {.i64=CUSTOM},    0, 0, FLAGS, "transition" },
+    {   "fade",      "fade transition",       0, AV_OPT_TYPE_CONST, {.i64=FADE},      0, 0, FLAGS, "transition" },
+    {   "wipeleft",  "wipe left transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPELEFT},  0, 0, FLAGS, "transition" },
+    {   "wiperight", "wipe right transition", 0, AV_OPT_TYPE_CONST, {.i64=WIPERIGHT}, 0, 0, FLAGS, "transition" },
+    {   "wipeup",    "wipe up transition",    0, AV_OPT_TYPE_CONST, {.i64=WIPEUP},    0, 0, FLAGS, "transition" },
+    {   "wipedown",  "wipe down transition",  0, AV_OPT_TYPE_CONST, {.i64=WIPEDOWN},  0, 0, FLAGS, "transition" },
+    {   "slideleft",  "slide left transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDELEFT},  0, 0, FLAGS, "transition" },
+    {   "slideright", "slide right transition", 0, AV_OPT_TYPE_CONST, {.i64=SLIDERIGHT}, 0, 0, FLAGS, "transition" },
+    {   "slideup",    "slide up transition",    0, AV_OPT_TYPE_CONST, {.i64=SLIDEUP},    0, 0, FLAGS, "transition" },
+    {   "slidedown",  "slide down transition",  0, AV_OPT_TYPE_CONST, {.i64=SLIDEDOWN},  0, 0, FLAGS, "transition" },
     { "source", "set OpenCL program source file for custom transition", OFFSET(source_file), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS },
     { "kernel", "set kernel name in program file for custom transition", OFFSET(kernel_name), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS },
     { "duration", "set cross fade duration", OFFSET(duration), AV_OPT_TYPE_DURATION, {.i64=1000000}, 0, 60000000, FLAGS },
@@ -402,15 +403,16 @@ static const AVFilterPad xfade_opencl_inputs[] = {
     {
         .name             = "main",
         .type             = AVMEDIA_TYPE_VIDEO,
-        .get_buffer.video = get_video_buffer,
+        .get_video_buffer = get_video_buffer,
         .config_props     = &ff_opencl_filter_config_input,
     },
     {
         .name             = "xfade",
         .type             = AVMEDIA_TYPE_VIDEO,
-        .get_buffer.video = get_video_buffer,
+        .get_video_buffer = get_video_buffer,
         .config_props     = &ff_opencl_filter_config_input,
     },
+    { NULL }
 };
 
 static const AVFilterPad xfade_opencl_outputs[] = {
@@ -419,19 +421,19 @@ static const AVFilterPad xfade_opencl_outputs[] = {
         .type          = AVMEDIA_TYPE_VIDEO,
         .config_props  = &xfade_opencl_config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_xfade_opencl = {
+AVFilter ff_vf_xfade_opencl = {
     .name            = "xfade_opencl",
     .description     = NULL_IF_CONFIG_SMALL("Cross fade one video with another video."),
     .priv_size       = sizeof(XFadeOpenCLContext),
     .priv_class      = &xfade_opencl_class,
     .init            = &ff_opencl_filter_init,
     .uninit          = &xfade_opencl_uninit,
+    .query_formats   = &ff_opencl_filter_query_formats,
     .activate        = &xfade_opencl_activate,
-    FILTER_INPUTS(xfade_opencl_inputs),
-    FILTER_OUTPUTS(xfade_opencl_outputs),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_OPENCL),
+    .inputs          = xfade_opencl_inputs,
+    .outputs         = xfade_opencl_outputs,
     .flags_internal  = FF_FILTER_FLAG_HWFRAME_AWARE,
-    .flags          = AVFILTER_FLAG_HWDEVICE,
 };

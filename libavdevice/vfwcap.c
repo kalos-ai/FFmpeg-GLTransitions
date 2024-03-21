@@ -25,7 +25,6 @@
 #include "libavutil/parseutils.h"
 
 #include "libavcodec/packet_internal.h"
-#include "libavformat/demux.h"
 #include "libavformat/internal.h"
 
 // windows.h must no be included before winsock2.h, and libavformat internal
@@ -46,7 +45,7 @@ struct vfw_ctx {
     HWND hwnd;
     HANDLE mutex;
     HANDLE event;
-    PacketListEntry *pktl;
+    PacketList *pktl;
     unsigned int curbufsize;
     unsigned int frame_num;
     char *video_size;       /**< A string describing video size, set by a private option. */
@@ -180,7 +179,7 @@ static LRESULT CALLBACK videostream_cb(HWND hwnd, LPVIDEOHDR vdhdr)
 {
     AVFormatContext *s;
     struct vfw_ctx *ctx;
-    PacketListEntry **ppktl, *pktl_next;
+    PacketList **ppktl, *pktl_next;
 
     s = (AVFormatContext *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
     ctx = s->priv_data;
@@ -192,7 +191,7 @@ static LRESULT CALLBACK videostream_cb(HWND hwnd, LPVIDEOHDR vdhdr)
 
     WaitForSingleObject(ctx->mutex, INFINITE);
 
-    pktl_next = av_mallocz(sizeof(*pktl_next));
+    pktl_next = av_mallocz(sizeof(PacketList));
     if(!pktl_next)
         goto fail;
 
@@ -221,7 +220,7 @@ fail:
 static int vfw_read_close(AVFormatContext *s)
 {
     struct vfw_ctx *ctx = s->priv_data;
-    PacketListEntry *pktl;
+    PacketList *pktl;
 
     if(ctx->hwnd) {
         SendMessage(ctx->hwnd, WM_CAP_SET_CALLBACK_VIDEOSTREAM, 0, 0);
@@ -235,7 +234,7 @@ static int vfw_read_close(AVFormatContext *s)
 
     pktl = ctx->pktl;
     while (pktl) {
-        PacketListEntry *next = pktl->next;
+        PacketList *next = pktl->next;
         av_packet_unref(&pktl->pkt);
         av_free(pktl);
         pktl = next;
@@ -441,7 +440,7 @@ fail:
 static int vfw_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     struct vfw_ctx *ctx = s->priv_data;
-    PacketListEntry *pktl = NULL;
+    PacketList *pktl = NULL;
 
     while(!pktl) {
         WaitForSingleObject(ctx->mutex, INFINITE);
@@ -483,13 +482,13 @@ static const AVClass vfw_class = {
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT
 };
 
-const FFInputFormat ff_vfwcap_demuxer = {
-    .p.name         = "vfwcap",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("VfW video capture"),
-    .p.flags        = AVFMT_NOFILE,
-    .p.priv_class   = &vfw_class,
+AVInputFormat ff_vfwcap_demuxer = {
+    .name           = "vfwcap",
+    .long_name      = NULL_IF_CONFIG_SMALL("VfW video capture"),
     .priv_data_size = sizeof(struct vfw_ctx),
     .read_header    = vfw_read_header,
     .read_packet    = vfw_read_packet,
     .read_close     = vfw_read_close,
+    .flags          = AVFMT_NOFILE,
+    .priv_class     = &vfw_class,
 };

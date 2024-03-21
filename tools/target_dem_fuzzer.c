@@ -23,7 +23,7 @@
 #include "libavcodec/avcodec.h"
 #include "libavcodec/bytestream.h"
 #include "libavformat/avformat.h"
-#include "libavformat/demux.h"
+
 
 typedef struct IOContext {
     int64_t pos;
@@ -33,13 +33,6 @@ typedef struct IOContext {
 } IOContext;
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
-
-int64_t interrupt_counter;
-static int interrupt_cb(void *ctx)
-{
-    interrupt_counter --;
-    return interrupt_counter < 0;
-}
 
 static void error(const char *err)
 {
@@ -113,12 +106,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     static int c;
     int seekable = 0;
     int ret;
-    const AVInputFormat *fmt = NULL;
+    AVInputFormat *fmt = NULL;
 #ifdef FFMPEG_DEMUXER
 #define DEMUXER_SYMBOL0(DEMUXER) ff_##DEMUXER##_demuxer
 #define DEMUXER_SYMBOL(DEMUXER) DEMUXER_SYMBOL0(DEMUXER)
-    extern const FFInputFormat DEMUXER_SYMBOL(FFMPEG_DEMUXER);
-    fmt = &DEMUXER_SYMBOL(FFMPEG_DEMUXER).p;
+    extern AVInputFormat DEMUXER_SYMBOL(FFMPEG_DEMUXER);
+    fmt = &DEMUXER_SYMBOL(FFMPEG_DEMUXER);
 #endif
 
     if (!c) {
@@ -167,14 +160,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 *strchr(extension, ',') = 0;
             av_strlcatf(filename, sizeof(filename), ".%s", extension);
         }
-
-        interrupt_counter = bytestream2_get_le32(&gbc);
-        avfmt->interrupt_callback.callback = interrupt_cb;
     }
-
-    // HLS uses a loop with sleep, we thus must breakout or we timeout
-    if (fmt && !strcmp(fmt->name, "hls"))
-        interrupt_counter &= 31;
 
     if (!io_buffer_size || size / io_buffer_size > maxblocks)
         io_buffer_size = size;

@@ -25,13 +25,11 @@
  * RV10 encoder
  */
 
-#include "codec_internal.h"
 #include "mpegvideo.h"
-#include "mpegvideoenc.h"
 #include "put_bits.h"
-#include "rv10enc.h"
+#include "rv10.h"
 
-int ff_rv10_encode_picture_header(MpegEncContext *s)
+int ff_rv10_encode_picture_header(MpegEncContext *s, int picture_number)
 {
     int full_frame= 0;
 
@@ -65,17 +63,23 @@ int ff_rv10_encode_picture_header(MpegEncContext *s)
     return 0;
 }
 
-const FFCodec ff_rv10_encoder = {
-    .p.name         = "rv10",
-    CODEC_LONG_NAME("RealVideo 1.0"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_RV10,
-    .p.priv_class   = &ff_mpv_enc_class,
-    .p.capabilities = AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+static const AVClass rv10_class = {
+    .class_name = "rv10 encoder",
+    .item_name  = av_default_item_name,
+    .option     = ff_mpv_generic_options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
+
+AVCodec ff_rv10_encoder = {
+    .name           = "rv10",
+    .long_name      = NULL_IF_CONFIG_SMALL("RealVideo 1.0"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_RV10,
     .priv_data_size = sizeof(MpegEncContext),
     .init           = ff_mpv_encode_init,
-    FF_CODEC_ENCODE_CB(ff_mpv_encode_picture),
+    .encode2        = ff_mpv_encode_picture,
     .close          = ff_mpv_encode_end,
     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
-    .p.pix_fmts     = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },
+    .pix_fmts       = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },
+    .priv_class     = &rv10_class,
 };

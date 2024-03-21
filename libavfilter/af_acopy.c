@@ -51,12 +51,20 @@ static const AVFilterPad acopy_inputs[] = {
         .type         = AVMEDIA_TYPE_AUDIO,
         .filter_frame = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_af_acopy = {
+static const AVFilterPad acopy_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_AUDIO,
+    },
+    { NULL }
+};
+
+AVFilter ff_af_acopy = {
     .name          = "acopy",
     .description   = NULL_IF_CONFIG_SMALL("Copy the input audio unchanged to the output."),
-    .flags         = AVFILTER_FLAG_METADATA_ONLY,
-    FILTER_INPUTS(acopy_inputs),
-    FILTER_OUTPUTS(ff_audio_default_filterpad),
+    .inputs        = acopy_inputs,
+    .outputs       = acopy_outputs,
 };

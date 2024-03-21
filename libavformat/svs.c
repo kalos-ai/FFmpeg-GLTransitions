@@ -22,7 +22,6 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 static int svs_probe(const AVProbeData *p)
@@ -52,9 +51,11 @@ static int svs_read_header(AVFormatContext *s)
     pitch = avio_rl32(s->pb);
     avio_skip(s->pb, 12);
 
+    s->internal->data_offset     = avio_tell(s->pb);
     st->codecpar->codec_type     = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id       = AV_CODEC_ID_ADPCM_PSX;
-    st->codecpar->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+    st->codecpar->channel_layout = AV_CH_LAYOUT_STEREO;
+    st->codecpar->channels       = 2;
     st->codecpar->sample_rate    = av_rescale_rnd(pitch, 48000, 4096, AV_ROUND_INF);
     st->codecpar->block_align    = 32;
     st->start_time               = 0;
@@ -85,11 +86,11 @@ static int svs_read_packet(AVFormatContext *s, AVPacket *pkt)
     return ret;
 }
 
-const FFInputFormat ff_svs_demuxer = {
-    .p.name         = "svs",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Square SVS"),
-    .p.extensions   = "svs",
+AVInputFormat ff_svs_demuxer = {
+    .name        = "svs",
+    .long_name   = NULL_IF_CONFIG_SMALL("Square SVS"),
     .read_probe  = svs_probe,
     .read_header = svs_read_header,
     .read_packet = svs_read_packet,
+    .extensions  = "svs",
 };
