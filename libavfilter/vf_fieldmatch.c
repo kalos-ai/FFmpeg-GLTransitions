@@ -970,13 +970,13 @@ static av_cold int fieldmatch_init(AVFilterContext *ctx)
     };
     int ret;
 
-    if ((ret = ff_insert_inpad(ctx, INPUT_MAIN, &pad)) < 0)
+    if ((ret = ff_append_inpad(ctx, &pad)) < 0)
         return ret;
 
     if (fm->ppsrc) {
         pad.name = "clean_src";
         pad.config_props = NULL;
-        if ((ret = ff_insert_inpad(ctx, INPUT_CLEANSRC, &pad)) < 0)
+        if ((ret = ff_append_inpad(ctx, &pad)) < 0)
             return ret;
     }
 
@@ -1040,7 +1040,7 @@ static const AVFilterPad fieldmatch_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_fieldmatch = {
+const AVFilter ff_vf_fieldmatch = {
     .name           = "fieldmatch",
     .description    = NULL_IF_CONFIG_SMALL("Field matching for inverse telecine."),
     .query_formats  = query_formats,

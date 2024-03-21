@@ -207,6 +207,7 @@ typedef struct HLSContext {
     int64_t cur_timestamp;
     AVIOInterruptCB *interrupt_callback;
     AVDictionary *avio_opts;
+    AVDictionary *seg_format_opts;
     char *allowed_extensions;
     int max_reload;
     int http_persistent;
@@ -799,7 +800,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                 key_type = KEY_AES_128;
             if (!strcmp(info.method, "SAMPLE-AES"))
                 key_type = KEY_SAMPLE_AES;
-            if (!strncmp(info.iv, "0x", 2) || !strncmp(info.iv, "0X", 2)) {
+            if (!av_strncasecmp(info.iv, "0x", 2)) {
                 ff_hex_to_data(iv, info.iv + 2);
                 has_iv = 1;
             }
@@ -842,6 +843,10 @@ static int parse_playlist(HLSContext *c, const char *url,
             ff_parse_key_value(ptr, (ff_parse_key_val_cb) handle_init_section_args,
                                &info);
             cur_init_section = new_init_section(pls, &info, url);
+            if (!cur_init_section) {
+                ret = AVERROR(ENOMEM);
+                goto fail;
+            }
             cur_init_section->key_type = key_type;
             if (has_iv) {
                 memcpy(cur_init_section->iv, iv, sizeof(iv));
@@ -1869,7 +1874,7 @@ static int hls_read_header(AVFormatContext *s)
     c->cur_timestamp = AV_NOPTS_VALUE;
 
     if ((ret = save_avio_options(s)) < 0)
-        goto fail;
+        return ret;
 
     /* XXX: Some HLS servers don't like being sent the range header,
        in this case, need to  setting http_seekable = 0 to disable
@@ -1877,12 +1882,11 @@ static int hls_read_header(AVFormatContext *s)
     av_dict_set_int(&c->avio_opts, "seekable", c->http_seekable, 0);
 
     if ((ret = parse_playlist(c, s->url, NULL, s->pb)) < 0)
-        goto fail;
+        return ret;
 
     if (c->n_variants == 0) {
         av_log(s, AV_LOG_WARNING, "Empty playlist\n");
-        ret = AVERROR_EOF;
-        goto fail;
+        return AVERROR_EOF;
     }
     /* If the playlist only contained playlists (Master Playlist),
      * parse each individual playlist. */
@@ -1895,7 +1899,7 @@ static int hls_read_header(AVFormatContext *s)
                 pls->broken = 1;
                 if (c->n_playlists > 1)
                     continue;
-                goto fail;
+                return ret;
             }
         }
     }
@@ -1935,7 +1939,7 @@ static int hls_read_header(AVFormatContext *s)
 
         program = av_new_program(s, i);
         if (!program)
-            goto fail;
+            return AVERROR(ENOMEM);
         av_dict_set_int(&program->metadata, "variant_bitrate", v->bandwidth, 0);
     }
 
@@ -1953,13 +1957,12 @@ static int hls_read_header(AVFormatContext *s)
     /* Open the demuxer for each playlist */
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
+        const AVInputFormat *in_fmt = NULL;
         char *url;
-        ff_const59 AVInputFormat *in_fmt = NULL;
+        AVDictionary *seg_format_opts = NULL;
 
-        if (!(pls->ctx = avformat_alloc_context())) {
-            ret = AVERROR(ENOMEM);
-            goto fail;
-        }
+        if (!(pls->ctx = avformat_alloc_context()))
+            return AVERROR(ENOMEM);
 
         if (pls->n_segments == 0)
             continue;
@@ -1982,10 +1985,9 @@ static int hls_read_header(AVFormatContext *s)
 
         pls->read_buffer = av_malloc(INITIAL_BUFFER_SIZE);
         if (!pls->read_buffer){
-            ret = AVERROR(ENOMEM);
             avformat_free_context(pls->ctx);
             pls->ctx = NULL;
-            goto fail;
+            return AVERROR(ENOMEM);
         }
         ffio_init_context(&pls->pb, pls->read_buffer, INITIAL_BUFFER_SIZE, 0, pls,
                           read_data, NULL, NULL);
@@ -2003,7 +2005,7 @@ static int hls_read_header(AVFormatContext *s)
             avformat_free_context(pls->ctx);
             pls->ctx = NULL;
             av_free(url);
-            goto fail;
+            return ret;
         }
         av_free(url);
         pls->ctx->pb       = &pls->pb;
@@ -2011,11 +2013,14 @@ static int hls_read_header(AVFormatContext *s)
         pls->ctx->flags   |= s->flags & ~AVFMT_FLAG_CUSTOM_IO;
 
         if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0)
-            goto fail;
+            return ret;
 
-        ret = avformat_open_input(&pls->ctx, pls->segments[0]->url, in_fmt, NULL);
+        av_dict_copy(&seg_format_opts, c->seg_format_opts, 0);
+
+        ret = avformat_open_input(&pls->ctx, pls->segments[0]->url, in_fmt, &seg_format_opts);
+        av_dict_free(&seg_format_opts);
         if (ret < 0)
-            goto fail;
+            return ret;
 
         if (pls->id3_deferred_extra && pls->ctx->nb_streams == 1) {
             ff_id3v2_parse_apic(pls->ctx, pls->id3_deferred_extra);
@@ -2036,7 +2041,7 @@ static int hls_read_header(AVFormatContext *s)
         if (pls->is_id3_timestamped || (pls->n_renditions > 0 && pls->renditions[0]->type == AVMEDIA_TYPE_AUDIO)) {
             ret = avformat_find_stream_info(pls->ctx, NULL);
             if (ret < 0)
-                goto fail;
+                return ret;
         }
 
         pls->has_noheader_flag = !!(pls->ctx->ctx_flags & AVFMTCTX_NOHEADER);
@@ -2044,7 +2049,7 @@ static int hls_read_header(AVFormatContext *s)
         /* Create new AVStreams for each stream in this playlist */
         ret = update_streams_from_subdemuxer(s, pls);
         if (ret < 0)
-            goto fail;
+            return ret;
 
         /*
          * Copy any metadata from playlist to main streams, but do not set
@@ -2061,9 +2066,6 @@ static int hls_read_header(AVFormatContext *s)
     update_noheader_flag(s);
 
     return 0;
-fail:
-    hls_close(s);
-    return ret;
 }
 
 static int recheck_discard_flags(AVFormatContext *s, int first)
@@ -2399,6 +2401,8 @@ static const AVOption hls_options[] = {
         OFFSET(http_multiple), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, FLAGS},
     {"http_seekable", "Use HTTP partial requests, 0 = disable, 1 = enable, -1 = auto",
         OFFSET(http_seekable), AV_OPT_TYPE_BOOL, { .i64 = -1}, -1, 1, FLAGS},
+    {"seg_format_options", "Set options for segment demuxer",
+        OFFSET(seg_format_opts), AV_OPT_TYPE_DICT, {.str = NULL}, 0, 0, FLAGS},
     {NULL}
 };
 
@@ -2409,12 +2413,13 @@ static const AVClass hls_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-AVInputFormat ff_hls_demuxer = {
+const AVInputFormat ff_hls_demuxer = {
     .name           = "hls",
     .long_name      = NULL_IF_CONFIG_SMALL("Apple HTTP Live Streaming"),
     .priv_class     = &hls_class,
     .priv_data_size = sizeof(HLSContext),
     .flags          = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT,
+    .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = hls_probe,
     .read_header    = hls_read_header,
     .read_packet    = hls_read_packet,

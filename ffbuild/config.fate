@@ -1,0 +1,1 @@
+config:x86:x86_64:generic:linux:gcc 13 (Debian 13.2.0-13):--prefix=/usr/local --enable-gpl --enable-nonfree --enable-libass --enable-libfdk-aac --enable-libfreetype --enable-libmp3lame --enable-libtheora --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265 --enable-libopus --enable-libxvid --enable-opengl --enable-filter=gltransition --extra-libs='-lGLEW -lEGL'

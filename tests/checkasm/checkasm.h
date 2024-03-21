@@ -31,6 +31,8 @@
 #include <sys/ioctl.h>
 #include <asm/unistd.h>
 #include <linux/perf_event.h>
+#elif CONFIG_MACOS_KPERF
+#include "libavutil/macos_kperf.h"
 #endif
 
 #include "libavutil/avstring.h"
@@ -43,6 +45,7 @@ void checkasm_check_aacpsdsp(void);
 void checkasm_check_afir(void);
 void checkasm_check_alacdsp(void);
 void checkasm_check_audiodsp(void);
+void checkasm_check_av_tx(void);
 void checkasm_check_blend(void);
 void checkasm_check_blockdsp(void);
 void checkasm_check_bswapdsp(void);
@@ -224,7 +227,7 @@ typedef struct CheckasmPerf {
     int iterations;
 } CheckasmPerf;
 
-#if defined(AV_READ_TIME) || CONFIG_LINUX_PERF
+#if defined(AV_READ_TIME) || CONFIG_LINUX_PERF || CONFIG_MACOS_KPERF
 
 #if CONFIG_LINUX_PERF
 #define PERF_START(t) do {                              \
@@ -235,6 +238,9 @@ typedef struct CheckasmPerf {
     ioctl(sysfd, PERF_EVENT_IOC_DISABLE, 0);            \
     read(sysfd, &t, sizeof(t));                         \
 } while (0)
+#elif CONFIG_MACOS_KPERF
+#define PERF_START(t) t = ff_kperf_cycles()
+#define PERF_STOP(t)  t = ff_kperf_cycles() - t
 #else
 #define PERF_START(t) t = AV_READ_TIME()
 #define PERF_STOP(t)  t = AV_READ_TIME() - t

@@ -50,7 +50,7 @@ static const AVOption derain_options[] = {
 #endif
     { "model",       "path to model file",          OFFSET(dnnctx.model_filename),   AV_OPT_TYPE_STRING,    { .str = NULL }, 0, 0, FLAGS },
     { "input",       "input name of the model",     OFFSET(dnnctx.model_inputname),  AV_OPT_TYPE_STRING,    { .str = "x" },  0, 0, FLAGS },
-    { "output",      "output name of the model",    OFFSET(dnnctx.model_outputname), AV_OPT_TYPE_STRING,    { .str = "y" },  0, 0, FLAGS },
+    { "output",      "output name of the model",    OFFSET(dnnctx.model_outputnames_string), AV_OPT_TYPE_STRING,    { .str = "y" },  0, 0, FLAGS },
     { NULL }
 };
 
@@ -58,15 +58,12 @@ AVFILTER_DEFINE_CLASS(derain);
 
 static int query_formats(AVFilterContext *ctx)
 {
-    AVFilterFormats *formats;
     const enum AVPixelFormat pixel_fmts[] = {
         AV_PIX_FMT_RGB24,
         AV_PIX_FMT_NONE
     };
 
-    formats = ff_make_format_list(pixel_fmts);
-
-    return ff_set_common_formats(ctx, formats);
+    return ff_set_common_formats_from_list(ctx, pixel_fmts);
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
@@ -126,7 +123,7 @@ static const AVFilterPad derain_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_derain = {
+const AVFilter ff_vf_derain = {
     .name          = "derain",
     .description   = NULL_IF_CONFIG_SMALL("Apply derain filter to the input."),
     .priv_size     = sizeof(DRContext),

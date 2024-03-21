@@ -434,10 +434,10 @@ static int dhav_read_seek(AVFormatContext *s, int stream_index,
 
     if (index < 0)
         return -1;
-    if (avio_seek(s->pb, st->index_entries[index].pos, SEEK_SET) < 0)
+    if (avio_seek(s->pb, st->internal->index_entries[index].pos, SEEK_SET) < 0)
         return -1;
 
-    pts = st->index_entries[index].timestamp;
+    pts = st->internal->index_entries[index].timestamp;
 
     for (int n = 0; n < s->nb_streams; n++) {
         AVStream *st = s->streams[n];
@@ -451,7 +451,7 @@ static int dhav_read_seek(AVFormatContext *s, int stream_index,
     return 0;
 }
 
-AVInputFormat ff_dhav_demuxer = {
+const AVInputFormat ff_dhav_demuxer = {
     .name           = "dhav",
     .long_name      = NULL_IF_CONFIG_SMALL("Video DAV"),
     .priv_data_size = sizeof(DHAVContext),

@@ -624,7 +624,8 @@ static AVFrame *blend_frame(AVFilterContext *ctx, AVFrame *top_buf,
                           .w = outw, .h = outh, .param = param, .plane = plane,
                           .inlink = inlink };
 
-        ctx->internal->execute(ctx, filter_slice, &td, NULL, FFMIN(outh, ff_filter_get_nb_threads(ctx)));
+        ff_filter_execute(ctx, filter_slice, &td, NULL,
+                          FFMIN(outh, ff_filter_get_nb_threads(ctx)));
     }
 
     if (!s->tblend)
@@ -680,10 +681,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
@@ -906,7 +904,7 @@ static const AVFilterPad blend_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_blend = {
+const AVFilter ff_vf_blend = {
     .name          = "blend",
     .description   = NULL_IF_CONFIG_SMALL("Blend two video frames into each other."),
     .preinit       = blend_framesync_preinit,
@@ -968,7 +966,7 @@ static const AVFilterPad tblend_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_tblend = {
+const AVFilter ff_vf_tblend = {
     .name          = "tblend",
     .description   = NULL_IF_CONFIG_SMALL("Blend successive frames."),
     .priv_size     = sizeof(BlendContext),

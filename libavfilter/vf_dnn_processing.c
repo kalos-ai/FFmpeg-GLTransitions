@@ -75,8 +75,7 @@ static int query_formats(AVFilterContext *context)
         AV_PIX_FMT_NV12,
         AV_PIX_FMT_NONE
     };
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    return ff_set_common_formats(context, fmts_list);
+    return ff_set_common_formats_from_list(context, pix_fmts);
 }
 
 #define LOG_FORMAT_CHANNEL_MISMATCH()                       \
@@ -225,6 +224,9 @@ static int copy_uv_planes(DnnProcessingContext *ctx, AVFrame *out, const AVFrame
         uv_height = AV_CEIL_RSHIFT(in->height, desc->log2_chroma_h);
         for (int i = 1; i < 3; ++i) {
             int bytewidth = av_image_get_linesize(in->format, in->width, i);
+            if (bytewidth < 0) {
+                return AVERROR(EINVAL);
+            }
             av_image_copy_plane(out->data[i], out->linesize[i],
                                 in->data[i], in->linesize[i],
                                 bytewidth, uv_height);
@@ -444,7 +446,7 @@ static const AVFilterPad dnn_processing_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_dnn_processing = {
+const AVFilter ff_vf_dnn_processing = {
     .name          = "dnn_processing",
     .description   = NULL_IF_CONFIG_SMALL("Apply DNN processing filter to the input."),
     .priv_size     = sizeof(DnnProcessingContext),

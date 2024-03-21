@@ -63,10 +63,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static int checkline(void *ctx, const unsigned char *src, int stride, int len, int bpp)
@@ -274,7 +271,7 @@ static const AVFilterPad avfilter_vf_cropdetect_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_cropdetect = {
+const AVFilter ff_vf_cropdetect = {
     .name          = "cropdetect",
     .description   = NULL_IF_CONFIG_SMALL("Auto-detect crop size."),
     .priv_size     = sizeof(CropDetectContext),

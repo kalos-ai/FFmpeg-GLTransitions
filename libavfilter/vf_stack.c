@@ -123,7 +123,7 @@ static av_cold int init(AVFilterContext *ctx)
         if (!pad.name)
             return AVERROR(ENOMEM);
 
-        if ((ret = ff_insert_inpad(ctx, i, &pad)) < 0) {
+        if ((ret = ff_append_inpad(ctx, &pad)) < 0) {
             av_freep(&pad.name);
             return ret;
         }
@@ -179,7 +179,8 @@ static int process_frame(FFFrameSync *fs)
         ff_fill_rectangle(&s->draw, &s->color, out->data, out->linesize,
                           0, 0, outlink->w, outlink->h);
 
-    ctx->internal->execute(ctx, process_slice, out, NULL, FFMIN(s->nb_inputs, ff_filter_get_nb_threads(ctx)));
+    ff_filter_execute(ctx, process_slice, out, NULL,
+                      FFMIN(s->nb_inputs, ff_filter_get_nb_threads(ctx)));
 
     return ff_filter_frame(outlink, out);
 }
@@ -409,7 +410,7 @@ static const AVFilterPad outputs[] = {
 #define hstack_options stack_options
 AVFILTER_DEFINE_CLASS(hstack);
 
-AVFilter ff_vf_hstack = {
+const AVFilter ff_vf_hstack = {
     .name          = "hstack",
     .description   = NULL_IF_CONFIG_SMALL("Stack video inputs horizontally."),
     .priv_size     = sizeof(StackContext),
@@ -429,7 +430,7 @@ AVFilter ff_vf_hstack = {
 #define vstack_options stack_options
 AVFILTER_DEFINE_CLASS(vstack);
 
-AVFilter ff_vf_vstack = {
+const AVFilter ff_vf_vstack = {
     .name          = "vstack",
     .description   = NULL_IF_CONFIG_SMALL("Stack video inputs vertically."),
     .priv_size     = sizeof(StackContext),
@@ -456,7 +457,7 @@ static const AVOption xstack_options[] = {
 
 AVFILTER_DEFINE_CLASS(xstack);
 
-AVFilter ff_vf_xstack = {
+const AVFilter ff_vf_xstack = {
     .name          = "xstack",
     .description   = NULL_IF_CONFIG_SMALL("Stack video inputs into custom layout."),
     .priv_size     = sizeof(StackContext),

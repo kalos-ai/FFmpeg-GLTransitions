@@ -103,10 +103,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static void lowpass_line_c(uint8_t *dstp, ptrdiff_t width, const uint8_t *srcp,
@@ -555,7 +552,7 @@ static const AVFilterPad tinterlace_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_tinterlace = {
+const AVFilter ff_vf_tinterlace = {
     .name          = "tinterlace",
     .description   = NULL_IF_CONFIG_SMALL("Perform temporal field interlacing."),
     .priv_size     = sizeof(TInterlaceContext),
@@ -567,7 +564,7 @@ AVFilter ff_vf_tinterlace = {
 };
 
 
-AVFilter ff_vf_interlace = {
+const AVFilter ff_vf_interlace = {
     .name          = "interlace",
     .description   = NULL_IF_CONFIG_SMALL("Convert progressive video into interlaced."),
     .priv_size     = sizeof(TInterlaceContext),

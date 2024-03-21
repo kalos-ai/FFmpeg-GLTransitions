@@ -47,14 +47,6 @@ enum {
     QSVDEINT_MORE_INPUT,
 };
 
-typedef struct QSVFrame {
-    AVFrame *frame;
-    mfxFrameSurface1 surface;
-    int used;
-
-    struct QSVFrame *next;
-} QSVFrame;
-
 typedef struct QSVDeintContext {
     const AVClass *class;
 
@@ -114,13 +106,8 @@ static int qsvdeint_query_formats(AVFilterContext *ctx)
     static const enum AVPixelFormat pixel_formats[] = {
         AV_PIX_FMT_QSV, AV_PIX_FMT_NONE,
     };
-    AVFilterFormats *pix_fmts  = ff_make_format_list(pixel_formats);
-    int ret;
 
-    if ((ret = ff_set_common_formats(ctx, pix_fmts)) < 0)
-        return ret;
-
-    return 0;
+    return ff_set_common_formats_from_list(ctx, pixel_formats);
 }
 
 static mfxStatus frame_alloc(mfxHDL pthis, mfxFrameAllocRequest *req,
@@ -376,7 +363,7 @@ static void clear_unused_frames(QSVDeintContext *s)
     while (cur) {
         if (!cur->surface.Data.Locked) {
             av_frame_free(&cur->frame);
-            cur->used = 0;
+            cur->queued = 0;
         }
         cur = cur->next;
     }
@@ -391,7 +378,7 @@ static int get_free_frame(QSVDeintContext *s, QSVFrame **f)
     frame = s->work_frames;
     last  = &s->work_frames;
     while (frame) {
-        if (!frame->used) {
+        if (!frame->queued) {
             *f = frame;
             return 0;
         }
@@ -453,7 +440,7 @@ static int submit_frame(AVFilterContext *ctx, AVFrame *frame,
                                               (AVRational){1, 90000});
 
     *surface = &qf->surface;
-    qf->used = 1;
+    qf->queued = 1;
 
     return 0;
 }
@@ -602,7 +589,7 @@ static const AVFilterPad qsvdeint_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_deinterlace_qsv = {
+const AVFilter ff_vf_deinterlace_qsv = {
     .name      = "deinterlace_qsv",
     .description = NULL_IF_CONFIG_SMALL("QuickSync video deinterlacing"),
 

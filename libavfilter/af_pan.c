@@ -251,7 +251,6 @@ static int query_formats(AVFilterContext *ctx)
     PanContext *pan = ctx->priv;
     AVFilterLink *inlink  = ctx->inputs[0];
     AVFilterLink *outlink = ctx->outputs[0];
-    AVFilterFormats *formats = NULL;
     AVFilterChannelLayouts *layouts;
     int ret;
 
@@ -260,8 +259,7 @@ static int query_formats(AVFilterContext *ctx)
     if ((ret = ff_set_common_formats(ctx, ff_all_formats(AVMEDIA_TYPE_AUDIO))) < 0)
         return ret;
 
-    formats = ff_all_samplerates();
-    if ((ret = ff_set_common_samplerates(ctx, formats)) < 0)
+    if ((ret = ff_set_common_all_samplerates(ctx)) < 0)
         return ret;
 
     // inlink supports any channel layout
@@ -448,7 +446,7 @@ static const AVFilterPad pan_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_af_pan = {
+const AVFilter ff_af_pan = {
     .name          = "pan",
     .description   = NULL_IF_CONFIG_SMALL("Remix channels with coefficients (panning)."),
     .priv_size     = sizeof(PanContext),

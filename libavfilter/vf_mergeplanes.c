@@ -96,7 +96,7 @@ static av_cold int init(AVFilterContext *ctx)
         if (!pad.name)
             return AVERROR(ENOMEM);
 
-        if ((ret = ff_insert_inpad(ctx, i, &pad)) < 0){
+        if ((ret = ff_append_inpad(ctx, &pad)) < 0){
             av_freep(&pad.name);
             return ret;
         }
@@ -296,7 +296,7 @@ static const AVFilterPad mergeplanes_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_mergeplanes = {
+const AVFilter ff_vf_mergeplanes = {
     .name          = "mergeplanes",
     .description   = NULL_IF_CONFIG_SMALL("Merge planes."),
     .priv_size     = sizeof(MergePlanesContext),

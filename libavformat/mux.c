@@ -21,6 +21,7 @@
 
 #include "avformat.h"
 #include "internal.h"
+#include "libavcodec/bsf.h"
 #include "libavcodec/internal.h"
 #include "libavcodec/packet_internal.h"
 #include "libavutil/opt.h"
@@ -133,7 +134,7 @@ enum AVChromaLocation ff_choose_chroma_location(AVFormatContext *s, AVStream *st
 
 }
 
-int avformat_alloc_output_context2(AVFormatContext **avctx, ff_const59 AVOutputFormat *oformat,
+int avformat_alloc_output_context2(AVFormatContext **avctx, const AVOutputFormat *oformat,
                                    const char *format, const char *filename)
 {
     AVFormatContext *s = avformat_alloc_context();
@@ -175,11 +176,6 @@ int avformat_alloc_output_context2(AVFormatContext **avctx, ff_const59 AVOutputF
         s->priv_data = NULL;
 
     if (filename) {
-#if FF_API_FORMAT_FILENAME
-FF_DISABLE_DEPRECATION_WARNINGS
-        av_strlcpy(s->filename, filename, sizeof(s->filename));
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
         if (!(s->url = av_strdup(filename)))
             goto nomem;
 
@@ -247,29 +243,10 @@ static int init_muxer(AVFormatContext *s, AVDictionary **options)
         (ret = av_opt_set_dict2(s->priv_data, &tmp, AV_OPT_SEARCH_CHILDREN)) < 0)
         goto fail;
 
-#if FF_API_FORMAT_FILENAME
-FF_DISABLE_DEPRECATION_WARNINGS
-    if (!s->url && !(s->url = av_strdup(s->filename))) {
-FF_ENABLE_DEPRECATION_WARNINGS
-#else
     if (!s->url && !(s->url = av_strdup(""))) {
-#endif
         ret = AVERROR(ENOMEM);
         goto fail;
     }
-
-#if FF_API_LAVF_AVCTX
-FF_DISABLE_DEPRECATION_WARNINGS
-    if (s->nb_streams && s->streams[0]->codec->flags & AV_CODEC_FLAG_BITEXACT) {
-        if (!(s->flags & AVFMT_FLAG_BITEXACT)) {
-            av_log(s, AV_LOG_WARNING,
-                   "The AVFormatContext is not in set to bitexact mode, only "
-                   "the AVCodecContext. If this is not intended, set "
-                   "AVFormatContext.flags |= AVFMT_FLAG_BITEXACT.\n");
-        }
-    }
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
 
     // some sanity checks
     if (s->nb_streams == 0 && !(of->flags & AVFMT_NOSTREAMS)) {
@@ -281,20 +258,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
     for (i = 0; i < s->nb_streams; i++) {
         st  = s->streams[i];
         par = st->codecpar;
-
-#if FF_API_LAVF_AVCTX
-FF_DISABLE_DEPRECATION_WARNINGS
-        if (st->codecpar->codec_type == AVMEDIA_TYPE_UNKNOWN &&
-            st->codec->codec_type    != AVMEDIA_TYPE_UNKNOWN) {
-            av_log(s, AV_LOG_WARNING, "Using AVStream.codec to pass codec "
-                   "parameters to muxers is deprecated, use AVStream.codecpar "
-                   "instead.\n");
-            ret = avcodec_parameters_from_context(st->codecpar, st->codec);
-            if (ret < 0)
-                goto fail;
-        }
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
 
         if (!st->time_base.num) {
             /* fall back on the default timebase values */
@@ -541,7 +504,7 @@ fail:
 #define AV_PKT_FLAG_UNCODED_FRAME 0x2000
 
 
-#if FF_API_COMPUTE_PKT_FIELDS2 && FF_API_LAVF_AVCTX
+#if FF_API_COMPUTE_PKT_FIELDS2
 FF_DISABLE_DEPRECATION_WARNINGS
 //FIXME merge with compute_pkt_fields
 static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *pkt)
@@ -563,7 +526,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
 
     if (s->debug & FF_FDEBUG_TS)
         av_log(s, AV_LOG_DEBUG, "compute_muxer_pkt_fields: pts:%s dts:%s cur_dts:%s b:%d size:%d st:%d\n",
-            av_ts2str(pkt->pts), av_ts2str(pkt->dts), av_ts2str(st->cur_dts), delay, pkt->size, pkt->stream_index);
+            av_ts2str(pkt->pts), av_ts2str(pkt->dts), av_ts2str(st->internal->cur_dts), delay, pkt->size, pkt->stream_index);
 
     if (pkt->pts == AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE && delay == 0)
         pkt->pts = pkt->dts;
@@ -591,14 +554,14 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
         pkt->dts = st->internal->pts_buffer[0];
     }
 
-    if (st->cur_dts && st->cur_dts != AV_NOPTS_VALUE &&
+    if (st->internal->cur_dts && st->internal->cur_dts != AV_NOPTS_VALUE &&
         ((!(s->oformat->flags & AVFMT_TS_NONSTRICT) &&
           st->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE &&
           st->codecpar->codec_type != AVMEDIA_TYPE_DATA &&
-          st->cur_dts >= pkt->dts) || st->cur_dts > pkt->dts)) {
+          st->internal->cur_dts >= pkt->dts) || st->internal->cur_dts > pkt->dts)) {
         av_log(s, AV_LOG_ERROR,
                "Application provided invalid, non monotonically increasing dts to muxer in stream %d: %s >= %s\n",
-               st->index, av_ts2str(st->cur_dts), av_ts2str(pkt->dts));
+               st->index, av_ts2str(st->internal->cur_dts), av_ts2str(pkt->dts));
         return AVERROR(EINVAL);
     }
     if (pkt->dts != AV_NOPTS_VALUE && pkt->pts != AV_NOPTS_VALUE && pkt->pts < pkt->dts) {
@@ -613,7 +576,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
         av_log(s, AV_LOG_DEBUG, "av_write_frame: pts2:%s dts2:%s\n",
             av_ts2str(pkt->pts), av_ts2str(pkt->dts));
 
-    st->cur_dts = pkt->dts;
+    st->internal->cur_dts = pkt->dts;
     st->internal->priv_pts->val = pkt->dts;
 
     /* update pts */
@@ -621,7 +584,7 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
     case AVMEDIA_TYPE_AUDIO:
         frame_size = (pkt->flags & AV_PKT_FLAG_UNCODED_FRAME) ?
                      (*(AVFrame **)pkt->data)->nb_samples :
-                     av_get_audio_frame_duration(st->codec, pkt->size);
+                     av_get_audio_frame_duration2(st->codecpar, pkt->size);
 
         /* HACK/FIXME, we skip the initial 0 size packets as they are most
          * likely equal to the encoder delay, but it would be better if we
@@ -779,7 +742,7 @@ static int check_packet(AVFormatContext *s, AVPacket *pkt)
 
 static int prepare_input_packet(AVFormatContext *s, AVStream *st, AVPacket *pkt)
 {
-#if !FF_API_COMPUTE_PKT_FIELDS2 || !FF_API_LAVF_AVCTX
+#if !FF_API_COMPUTE_PKT_FIELDS2
     /* sanitize the timestamps */
     if (!(s->oformat->flags & AVFMT_NOTIMESTAMPS)) {
 
@@ -801,13 +764,13 @@ static int prepare_input_packet(AVFormatContext *s, AVStream *st, AVPacket *pkt)
 
         /* check that the dts are increasing (or at least non-decreasing,
          * if the format allows it */
-        if (st->cur_dts != AV_NOPTS_VALUE &&
-            ((!(s->oformat->flags & AVFMT_TS_NONSTRICT) && st->cur_dts >= pkt->dts) ||
-             st->cur_dts > pkt->dts)) {
+        if (st->internal->cur_dts != AV_NOPTS_VALUE &&
+            ((!(s->oformat->flags & AVFMT_TS_NONSTRICT) && st->internal->cur_dts >= pkt->dts) ||
+             st->internal->cur_dts > pkt->dts)) {
             av_log(s, AV_LOG_ERROR,
                    "Application provided invalid, non monotonically increasing "
                    "dts to muxer in stream %d: %" PRId64 " >= %" PRId64 "\n",
-                   st->index, st->cur_dts, pkt->dts);
+                   st->index, st->internal->cur_dts, pkt->dts);
             return AVERROR(EINVAL);
         }
 
@@ -1140,7 +1103,7 @@ static int write_packet_common(AVFormatContext *s, AVStream *st, AVPacket *pkt, 
 
     guess_pkt_duration(s, st, pkt);
 
-#if FF_API_COMPUTE_PKT_FIELDS2 && FF_API_LAVF_AVCTX
+#if FF_API_COMPUTE_PKT_FIELDS2
     if ((ret = compute_muxer_pkt_fields(s, st, pkt)) < 0 && !(s->oformat->flags & AVFMT_NOTIMESTAMPS))
         return ret;
 #endif
@@ -1308,7 +1271,7 @@ int av_write_trailer(AVFormatContext *s)
        ret = s->pb ? s->pb->error : 0;
     for (i = 0; i < s->nb_streams; i++) {
         av_freep(&s->streams[i]->priv_data);
-        av_freep(&s->streams[i]->index_entries);
+        av_freep(&s->streams[i]->internal->index_entries);
     }
     if (s->oformat->priv_class)
         av_opt_free(s->priv_data);

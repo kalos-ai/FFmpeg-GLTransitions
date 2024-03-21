@@ -150,8 +150,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     av_frame_copy_props(out, in);
 
     td.out = out, td.in = in;
-    ctx->internal->execute(ctx, weave_slice, &td, NULL, FFMIN(s->planeheight[1],
-                                                              ff_filter_get_nb_threads(ctx)));
+    ff_filter_execute(ctx, weave_slice, &td, NULL,
+                      FFMIN(s->planeheight[1], ff_filter_get_nb_threads(ctx)));
 
     out->pts = s->double_weave ? s->prev->pts : in->pts / 2;
     out->interlaced_frame = 1;
@@ -190,7 +190,7 @@ static const AVFilterPad weave_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_weave = {
+const AVFilter ff_vf_weave = {
     .name          = "weave",
     .description   = NULL_IF_CONFIG_SMALL("Weave input video fields into frames."),
     .priv_size     = sizeof(WeaveContext),
@@ -215,7 +215,7 @@ static av_cold int init(AVFilterContext *ctx)
 #define doubleweave_options weave_options
 AVFILTER_DEFINE_CLASS(doubleweave);
 
-AVFilter ff_vf_doubleweave = {
+const AVFilter ff_vf_doubleweave = {
     .name          = "doubleweave",
     .description   = NULL_IF_CONFIG_SMALL("Weave input video fields into double number of frames."),
     .priv_size     = sizeof(WeaveContext),

@@ -33,7 +33,7 @@ typedef struct WebpContext{
     int using_webp_anim_encoder;
 } WebpContext;
 
-static int webp_write_header(AVFormatContext *s)
+static int webp_init(AVFormatContext *s)
 {
     AVStream *st;
 
@@ -53,22 +53,22 @@ static int webp_write_header(AVFormatContext *s)
 
 static int is_animated_webp_packet(AVPacket *pkt)
 {
-        int skip = 0;
-        unsigned flags = 0;
+    int skip = 0;
+    unsigned flags = 0;
 
-        if (pkt->size < 4)
+    if (pkt->size < 4)
         return AVERROR_INVALIDDATA;
-        if (AV_RL32(pkt->data) == AV_RL32("RIFF"))
-            skip = 12;
+    if (AV_RL32(pkt->data) == AV_RL32("RIFF"))
+        skip = 12;
     // Safe to do this as a valid WebP bitstream is >=30 bytes.
-        if (pkt->size < skip + 4)
+    if (pkt->size < skip + 4)
         return AVERROR_INVALIDDATA;
-        if (AV_RL32(pkt->data + skip) == AV_RL32("VP8X")) {
-            flags |= pkt->data[skip + 4 + 4];
-        }
+    if (AV_RL32(pkt->data + skip) == AV_RL32("VP8X")) {
+        flags |= pkt->data[skip + 4 + 4];
+    }
 
-        if (flags & 2)  // ANIMATION_FLAG is on
-            return 1;
+    if (flags & 2)  // ANIMATION_FLAG is on
+        return 1;
     return 0;
 }
 
@@ -172,7 +172,7 @@ static int webp_write_trailer(AVFormatContext *s)
     WebpContext *w = s->priv_data;
 
     if (w->using_webp_anim_encoder) {
-        if ((w->frame_count > 1) && w->loop) {  // Write loop count.
+        if (w->loop) {  // Write loop count.
             avio_seek(s->pb, 42, SEEK_SET);
             avio_wl16(s->pb, w->loop);
         }
@@ -212,13 +212,13 @@ static const AVClass webp_muxer_class = {
     .version    = LIBAVUTIL_VERSION_INT,
     .option     = options,
 };
-AVOutputFormat ff_webp_muxer = {
+const AVOutputFormat ff_webp_muxer = {
     .name           = "webp",
     .long_name      = NULL_IF_CONFIG_SMALL("WebP"),
     .extensions     = "webp",
     .priv_data_size = sizeof(WebpContext),
     .video_codec    = AV_CODEC_ID_WEBP,
-    .write_header   = webp_write_header,
+    .init           = webp_init,
     .write_packet   = webp_write_packet,
     .write_trailer  = webp_write_trailer,
     .deinit         = webp_deinit,

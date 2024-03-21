@@ -32,6 +32,7 @@
 #include "internal.h"
 #include <pthread.h>
 #include "atsc_a53.h"
+#include "encode.h"
 #include "h264.h"
 #include "h264_sei.h"
 #include <dlfcn.h>
@@ -47,6 +48,10 @@ enum { kCMVideoCodecType_HEVCWithAlpha = 'muxa' };
 #if !HAVE_KCVPIXELFORMATTYPE_420YPCBCR10BIPLANARVIDEORANGE
 enum { kCVPixelFormatType_420YpCbCr10BiPlanarFullRange = 'xf20' };
 enum { kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange = 'x420' };
+#endif
+
+#ifndef TARGET_CPU_ARM64
+#   define TARGET_CPU_ARM64 0
 #endif
 
 typedef OSStatus (*getParameterSetAtIndex)(CMFormatDescriptionRef videoDesc,
@@ -1033,7 +1038,7 @@ static int get_cv_ycbcr_matrix(AVCodecContext *avctx, CFStringRef *matrix) {
 // constant quality only on Macs with Apple Silicon
 static bool vtenc_qscale_enabled(void)
 {
-    return TARGET_OS_OSX && TARGET_CPU_ARM64;
+    return !TARGET_OS_IPHONE && TARGET_CPU_ARM64;
 }
 
 static int vtenc_create_encoder(AVCodecContext   *avctx,
@@ -1113,8 +1118,8 @@ static int vtenc_create_encoder(AVCodecContext   *avctx,
         return AVERROR_EXTERNAL;
     }
 
-    if (vtctx->codec_id == AV_CODEC_ID_H264 && max_rate > 0) {
-        // kVTCompressionPropertyKey_DataRateLimits is not available for HEVC
+    if ((vtctx->codec_id == AV_CODEC_ID_H264 || vtctx->codec_id == AV_CODEC_ID_HEVC)
+            && max_rate > 0) {
         bytes_per_second_value = max_rate >> 3;
         bytes_per_second = CFNumberCreate(kCFAllocatorDefault,
                                           kCFNumberSInt64Type,
@@ -1152,7 +1157,11 @@ static int vtenc_create_encoder(AVCodecContext   *avctx,
 
         if (status) {
             av_log(avctx, AV_LOG_ERROR, "Error setting max bitrate property: %d\n", status);
-            return AVERROR_EXTERNAL;
+            // kVTCompressionPropertyKey_DataRateLimits is available for HEVC
+            // now but not on old release. There is no document about since
+            // when. So ignore the error if it failed for hevc.
+            if (vtctx->codec_id != AV_CODEC_ID_HEVC)
+                return AVERROR_EXTERNAL;
         }
     }
 
@@ -1389,7 +1398,6 @@ static int vtenc_configure_encoder(AVCodecContext *avctx)
     }
 
     vtctx->codec_id = avctx->codec_id;
-    avctx->max_b_frames = 16;
 
     if (vtctx->codec_id == AV_CODEC_ID_H264) {
         vtctx->get_param_set_func = CMVideoFormatDescriptionGetH264ParameterSetAtIndex;
@@ -1974,7 +1982,7 @@ static int vtenc_cm_to_avpacket(
                    sei_nalu_size +
                    nalu_count * ((int)sizeof(start_code) - (int)length_code_size);
 
-    status = ff_alloc_packet2(avctx, pkt, out_buf_size, out_buf_size);
+    status = ff_get_encode_buffer(avctx, pkt, out_buf_size, 0);
     if (status < 0)
         return status;
 
@@ -2017,7 +2025,6 @@ static int vtenc_cm_to_avpacket(
     time_base_num = avctx->time_base.num;
     pkt->pts = pts.value / time_base_num;
     pkt->dts = dts.value / time_base_num - dts_delta;
-    pkt->size = out_buf_size;
 
     return 0;
 }
@@ -2659,17 +2666,17 @@ static const AVClass h264_videotoolbox_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-AVCodec ff_h264_videotoolbox_encoder = {
+const AVCodec ff_h264_videotoolbox_encoder = {
     .name             = "h264_videotoolbox",
     .long_name        = NULL_IF_CONFIG_SMALL("VideoToolbox H.264 Encoder"),
     .type             = AVMEDIA_TYPE_VIDEO,
     .id               = AV_CODEC_ID_H264,
+    .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
     .priv_data_size   = sizeof(VTEncContext),
     .pix_fmts         = avc_pix_fmts,
     .init             = vtenc_init,
     .encode2          = vtenc_frame,
     .close            = vtenc_close,
-    .capabilities     = AV_CODEC_CAP_DELAY,
     .priv_class       = &h264_videotoolbox_class,
     .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE |
                         FF_CODEC_CAP_INIT_CLEANUP,
@@ -2693,17 +2700,18 @@ static const AVClass hevc_videotoolbox_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-AVCodec ff_hevc_videotoolbox_encoder = {
+const AVCodec ff_hevc_videotoolbox_encoder = {
     .name             = "hevc_videotoolbox",
     .long_name        = NULL_IF_CONFIG_SMALL("VideoToolbox H.265 Encoder"),
     .type             = AVMEDIA_TYPE_VIDEO,
     .id               = AV_CODEC_ID_HEVC,
+    .capabilities     = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
+                        AV_CODEC_CAP_HARDWARE,
     .priv_data_size   = sizeof(VTEncContext),
     .pix_fmts         = hevc_pix_fmts,
     .init             = vtenc_init,
     .encode2          = vtenc_frame,
     .close            = vtenc_close,
-    .capabilities     = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HARDWARE,
     .priv_class       = &hevc_videotoolbox_class,
     .caps_internal    = FF_CODEC_CAP_INIT_THREADSAFE |
                         FF_CODEC_CAP_INIT_CLEANUP,

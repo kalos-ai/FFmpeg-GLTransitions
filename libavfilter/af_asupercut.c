@@ -51,32 +51,20 @@ typedef struct ASuperCutContext {
 
 static int query_formats(AVFilterContext *ctx)
 {
-    AVFilterFormats *formats = NULL;
-    AVFilterChannelLayouts *layouts = NULL;
     static const enum AVSampleFormat sample_fmts[] = {
         AV_SAMPLE_FMT_FLTP,
         AV_SAMPLE_FMT_DBLP,
         AV_SAMPLE_FMT_NONE
     };
-    int ret;
-
-    formats = ff_make_format_list(sample_fmts);
-    if (!formats)
-        return AVERROR(ENOMEM);
-    ret = ff_set_common_formats(ctx, formats);
+    int ret = ff_set_common_formats_from_list(ctx, sample_fmts);
     if (ret < 0)
         return ret;
 
-    layouts = ff_all_channel_counts();
-    if (!layouts)
-        return AVERROR(ENOMEM);
-
-    ret = ff_set_common_channel_layouts(ctx, layouts);
+    ret = ff_set_common_all_channel_counts(ctx);
     if (ret < 0)
         return ret;
 
-    formats = ff_all_samplerates();
-    return ff_set_common_samplerates(ctx, formats);
+    return ff_set_common_all_samplerates(ctx);
 }
 
 static void calc_q_factors(int n, double *q)
@@ -311,8 +299,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
 
     td.in = in; td.out = out;
-    ctx->internal->execute(ctx, s->filter_channels, &td, NULL, FFMIN(inlink->channels,
-                                                               ff_filter_get_nb_threads(ctx)));
+    ff_filter_execute(ctx, s->filter_channels, &td, NULL,
+                      FFMIN(inlink->channels, ff_filter_get_nb_threads(ctx)));
 
     if (out != in)
         av_frame_free(&in);
@@ -368,7 +356,7 @@ static const AVFilterPad outputs[] = {
     { NULL }
 };
 
-AVFilter ff_af_asupercut = {
+const AVFilter ff_af_asupercut = {
     .name            = "asupercut",
     .description     = NULL_IF_CONFIG_SMALL("Cut super frequencies."),
     .query_formats   = query_formats,
@@ -391,7 +379,7 @@ static const AVOption asubcut_options[] = {
 
 AVFILTER_DEFINE_CLASS(asubcut);
 
-AVFilter ff_af_asubcut = {
+const AVFilter ff_af_asubcut = {
     .name            = "asubcut",
     .description     = NULL_IF_CONFIG_SMALL("Cut subwoofer frequencies."),
     .query_formats   = query_formats,
@@ -416,7 +404,7 @@ static const AVOption asuperpass_asuperstop_options[] = {
 #define asuperpass_options asuperpass_asuperstop_options
 AVFILTER_DEFINE_CLASS(asuperpass);
 
-AVFilter ff_af_asuperpass = {
+const AVFilter ff_af_asuperpass = {
     .name            = "asuperpass",
     .description     = NULL_IF_CONFIG_SMALL("Apply high order Butterworth band-pass filter."),
     .query_formats   = query_formats,
@@ -433,7 +421,7 @@ AVFilter ff_af_asuperpass = {
 #define asuperstop_options asuperpass_asuperstop_options
 AVFILTER_DEFINE_CLASS(asuperstop);
 
-AVFilter ff_af_asuperstop = {
+const AVFilter ff_af_asuperstop = {
     .name            = "asuperstop",
     .description     = NULL_IF_CONFIG_SMALL("Apply high order Butterworth band-stop filter."),
     .query_formats   = query_formats,

@@ -73,7 +73,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    return ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static void erosion(uint8_t *dst, const uint8_t *p1, int width,
@@ -328,7 +328,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     td.in = in;
     td.out = out;
-    ctx->internal->execute(ctx, filter_slice, &td, NULL, FFMIN(s->planeheight[1], ff_filter_get_nb_threads(ctx)));
+    ff_filter_execute(ctx, filter_slice, &td, NULL,
+                      FFMIN(s->planeheight[1], ff_filter_get_nb_threads(ctx)));
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
@@ -358,7 +359,7 @@ static const AVFilterPad neighbor_outputs[] = {
 #define DEFINE_NEIGHBOR_FILTER(name_, description_)          \
 AVFILTER_DEFINE_CLASS(name_);                                \
                                                              \
-AVFilter ff_vf_##name_ = {                                   \
+const AVFilter ff_vf_##name_ = {                                   \
     .name          = #name_,                                 \
     .description   = NULL_IF_CONFIG_SMALL(description_),     \
     .priv_size     = sizeof(NContext),                       \

@@ -48,13 +48,6 @@ static void *ff_avio_child_next(void *obj, void *prev)
     return prev ? NULL : s->opaque;
 }
 
-#if FF_API_CHILD_CLASS_NEXT
-static const AVClass *ff_avio_child_class_next(const AVClass *prev)
-{
-    return prev ? NULL : &ffurl_context_class;
-}
-#endif
-
 static const AVClass *child_class_iterate(void **iter)
 {
     const AVClass *c = *iter ? NULL : &ffurl_context_class;
@@ -76,9 +69,6 @@ const AVClass ff_avio_class = {
     .version    = LIBAVUTIL_VERSION_INT,
     .option     = ff_avio_options,
     .child_next = ff_avio_child_next,
-#if FF_API_CHILD_CLASS_NEXT
-    .child_class_next = ff_avio_child_class_next,
-#endif
     .child_class_iterate = child_class_iterate,
 };
 
@@ -519,14 +509,7 @@ static int read_packet_wrapper(AVIOContext *s, uint8_t *buf, int size)
     if (!s->read_packet)
         return AVERROR(EINVAL);
     ret = s->read_packet(s->opaque, buf, size);
-#if FF_API_OLD_AVIO_EOF_0
-    if (!ret && !s->max_packet_size) {
-        av_log(NULL, AV_LOG_WARNING, "Invalid return value 0 for stream protocol\n");
-        ret = AVERROR_EOF;
-    }
-#else
     av_assert2(ret || s->max_packet_size);
-#endif
     return ret;
 }
 
@@ -811,7 +794,7 @@ int ff_get_chomp_line(AVIOContext *s, char *buf, int maxlen)
     return len;
 }
 
-int64_t ff_read_line_to_bprint(AVIOContext *s, AVBPrint *bp)
+static int64_t read_line_to_bprint(AVIOContext *s, AVBPrint *bp)
 {
     int len, end;
     int64_t read = 0;
@@ -847,7 +830,7 @@ int64_t ff_read_line_to_bprint_overwrite(AVIOContext *s, AVBPrint *bp)
     int64_t ret;
 
     av_bprint_clear(bp);
-    ret = ff_read_line_to_bprint(s, bp);
+    ret = read_line_to_bprint(s, bp);
     if (ret < 0)
         return ret;
 

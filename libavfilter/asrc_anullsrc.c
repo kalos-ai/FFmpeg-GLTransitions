@@ -87,10 +87,10 @@ static int query_formats(AVFilterContext *ctx)
     int ret;
 
     if ((ret = ff_set_common_formats         (ctx, ff_all_formats              (AVMEDIA_TYPE_AUDIO))) < 0 ||
-        (ret = ff_set_common_samplerates     (ctx, ff_make_format_list         (sample_rates      ))) < 0)
+        (ret = ff_set_common_samplerates_from_list(ctx, sample_rates)) < 0)
         return ret;
 
-    return ff_set_common_channel_layouts(ctx, ff_make_format64_list(chlayouts));
+    return ff_set_common_channel_layouts_from_list(ctx, chlayouts);
 }
 
 static av_cold int config_props(AVFilterLink *outlink)
@@ -137,7 +137,7 @@ static const AVFilterPad avfilter_asrc_anullsrc_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_asrc_anullsrc = {
+const AVFilter ff_asrc_anullsrc = {
     .name          = "anullsrc",
     .description   = NULL_IF_CONFIG_SMALL("Null audio source, return empty audio frames."),
     .init          = init,

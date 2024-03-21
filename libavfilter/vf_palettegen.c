@@ -113,8 +113,8 @@ static int cmp_##name(const void *pa, const void *pb)   \
 {                                                       \
     const struct color_ref * const *a = pa;             \
     const struct color_ref * const *b = pb;             \
-    return   ((*a)->color >> (8 * (2 - (pos))) & 0xff)  \
-           - ((*b)->color >> (8 * (2 - (pos))) & 0xff); \
+    return   (int)((*a)->color >> (8 * (2 - (pos))) & 0xff)  \
+           - (int)((*b)->color >> (8 * (2 - (pos))) & 0xff); \
 }
 
 DECLARE_CMP_FUNC(r, 0)
@@ -570,7 +570,7 @@ static const AVFilterPad palettegen_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_palettegen = {
+const AVFilter ff_vf_palettegen = {
     .name          = "palettegen",
     .description   = NULL_IF_CONFIG_SMALL("Find the optimal palette for a given stream."),
     .priv_size     = sizeof(PaletteGenContext),

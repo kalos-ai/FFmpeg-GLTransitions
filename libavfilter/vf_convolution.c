@@ -100,7 +100,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    return ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 typedef struct ThreadData {
@@ -736,7 +736,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     td.in = in;
     td.out = out;
-    ctx->internal->execute(ctx, filter_slice, &td, NULL, FFMIN3(s->planeheight[1], s->planewidth[1], s->nb_threads));
+    ff_filter_execute(ctx, filter_slice, &td, NULL,
+                      FFMIN3(s->planeheight[1], s->planewidth[1], s->nb_threads));
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
@@ -902,7 +903,7 @@ static const AVFilterPad convolution_outputs[] = {
 
 #if CONFIG_CONVOLUTION_FILTER
 
-AVFilter ff_vf_convolution = {
+const AVFilter ff_vf_convolution = {
     .name          = "convolution",
     .description   = NULL_IF_CONFIG_SMALL("Apply convolution filter."),
     .priv_size     = sizeof(ConvolutionContext),
@@ -931,7 +932,7 @@ static const AVOption prewitt_roberts_sobel_options[] = {
 #define prewitt_options prewitt_roberts_sobel_options
 AVFILTER_DEFINE_CLASS(prewitt);
 
-AVFilter ff_vf_prewitt = {
+const AVFilter ff_vf_prewitt = {
     .name          = "prewitt",
     .description   = NULL_IF_CONFIG_SMALL("Apply prewitt operator."),
     .priv_size     = sizeof(ConvolutionContext),
@@ -951,7 +952,7 @@ AVFilter ff_vf_prewitt = {
 #define sobel_options prewitt_roberts_sobel_options
 AVFILTER_DEFINE_CLASS(sobel);
 
-AVFilter ff_vf_sobel = {
+const AVFilter ff_vf_sobel = {
     .name          = "sobel",
     .description   = NULL_IF_CONFIG_SMALL("Apply sobel operator."),
     .priv_size     = sizeof(ConvolutionContext),
@@ -971,7 +972,7 @@ AVFilter ff_vf_sobel = {
 #define roberts_options prewitt_roberts_sobel_options
 AVFILTER_DEFINE_CLASS(roberts);
 
-AVFilter ff_vf_roberts = {
+const AVFilter ff_vf_roberts = {
     .name          = "roberts",
     .description   = NULL_IF_CONFIG_SMALL("Apply roberts cross operator."),
     .priv_size     = sizeof(ConvolutionContext),
@@ -991,7 +992,7 @@ AVFilter ff_vf_roberts = {
 #define kirsch_options prewitt_roberts_sobel_options
 AVFILTER_DEFINE_CLASS(kirsch);
 
-AVFilter ff_vf_kirsch = {
+const AVFilter ff_vf_kirsch = {
     .name          = "kirsch",
     .description   = NULL_IF_CONFIG_SMALL("Apply kirsch operator."),
     .priv_size     = sizeof(ConvolutionContext),

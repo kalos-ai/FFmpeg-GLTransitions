@@ -177,7 +177,13 @@ static void mpc8_parse_seektable(AVFormatContext *s, int64_t off)
     }
     seekd = get_bits(&gb, 4);
     for(i = 0; i < 2; i++){
-        pos = gb_get_v(&gb) + c->header_pos;
+        pos = gb_get_v(&gb);
+        if (av_sat_add64(pos, c->header_pos) != pos + (uint64_t)c->header_pos) {
+            av_free(buf);
+            return;
+        }
+
+        pos += c->header_pos;
         ppos[1 - i] = pos;
         av_add_index_entry(s->streams[0], pos, i, 0, 0, AVINDEX_KEYFRAME);
     }
@@ -205,8 +211,11 @@ static void mpc8_handle_chunk(AVFormatContext *s, int tag, int64_t chunk_pos, in
 
     switch(tag){
     case TAG_SEEKTBLOFF:
-        pos = avio_tell(pb) + size;
+        pos = avio_tell(pb);
         off = ffio_read_varlen(pb);
+        if (pos > INT64_MAX - size || off < 0 || off > INT64_MAX - chunk_pos)
+            return;
+        pos += size;
         mpc8_parse_seektable(s, chunk_pos + off);
         avio_seek(pb, pos, SEEK_SET);
         break;
@@ -318,14 +327,14 @@ static int mpc8_read_seek(AVFormatContext *s, int stream_index, int64_t timestam
     int index = av_index_search_timestamp(st, timestamp, flags);
 
     if(index < 0) return -1;
-    if (avio_seek(s->pb, st->index_entries[index].pos, SEEK_SET) < 0)
+    if (avio_seek(s->pb, st->internal->index_entries[index].pos, SEEK_SET) < 0)
         return -1;
-    ff_update_cur_dts(s, st, st->index_entries[index].timestamp);
+    avpriv_update_cur_dts(s, st, st->internal->index_entries[index].timestamp);
     return 0;
 }
 
 
-AVInputFormat ff_mpc8_demuxer = {
+const AVInputFormat ff_mpc8_demuxer = {
     .name           = "mpc8",
     .long_name      = NULL_IF_CONFIG_SMALL("Musepack SV8"),
     .priv_data_size = sizeof(MPCContext),

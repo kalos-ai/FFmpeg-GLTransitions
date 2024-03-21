@@ -87,10 +87,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
@@ -146,7 +143,7 @@ static const AVFilterPad ocr_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_ocr = {
+const AVFilter ff_vf_ocr = {
     .name          = "ocr",
     .description   = NULL_IF_CONFIG_SMALL("Optical Character Recognition."),
     .priv_size     = sizeof(OCRContext),

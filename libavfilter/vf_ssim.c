@@ -359,7 +359,8 @@ static int do_ssim(FFFrameSync *fs)
         td.planeheight[n] = s->planeheight[n];
     }
 
-    ctx->internal->execute(ctx, s->ssim_plane, &td, NULL, FFMIN((s->planeheight[1] + 3) >> 2, s->nb_threads));
+    ff_filter_execute(ctx, s->ssim_plane, &td, NULL,
+                      FFMIN((s->planeheight[1] + 3) >> 2, s->nb_threads));
 
     for (i = 0; i < s->nb_components; i++) {
         for (int j = 0; j < s->nb_threads; j++)
@@ -434,10 +435,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static int config_input_ref(AVFilterLink *inlink)
@@ -496,7 +494,7 @@ static int config_input_ref(AVFilterLink *inlink)
     if (!s->score)
         return AVERROR(ENOMEM);
 
-    for (int t = 0; t < s->nb_threads && s->score; t++) {
+    for (int t = 0; t < s->nb_threads; t++) {
         s->score[t] = av_calloc(s->nb_components, sizeof(*s->score[0]));
         if (!s->score[t])
             return AVERROR(ENOMEM);
@@ -593,7 +591,7 @@ static const AVFilterPad ssim_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_ssim = {
+const AVFilter ff_vf_ssim = {
     .name          = "ssim",
     .description   = NULL_IF_CONFIG_SMALL("Calculate the SSIM between two video streams."),
     .preinit       = ssim_framesync_preinit,

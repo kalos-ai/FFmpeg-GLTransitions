@@ -93,7 +93,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_NONE
     };
 
-    return ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static void compute_contrast_function(const float *const histograms[256],
@@ -427,7 +427,7 @@ static const AVFilterPad tmidequalizer_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_tmidequalizer = {
+const AVFilter ff_vf_tmidequalizer = {
     .name          = "tmidequalizer",
     .description   = NULL_IF_CONFIG_SMALL("Apply Temporal Midway Equalization."),
     .priv_size     = sizeof(TMidEqualizerContext),

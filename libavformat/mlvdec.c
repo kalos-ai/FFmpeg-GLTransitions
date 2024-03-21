@@ -52,8 +52,6 @@ typedef struct {
     uint64_t pts;
 } MlvContext;
 
-static int read_close(AVFormatContext *s);
-
 static int probe(const AVProbeData *p)
 {
     if (AV_RL32(p->buf) == MKTAG('M','L','V','I') &&
@@ -191,12 +189,12 @@ static int scan_file(AVFormatContext *avctx, AVStream *vst, AVStream *ast, int f
             }
         } else if (vst && type == MKTAG('V', 'I', 'D', 'F') && size >= 4) {
             uint64_t pts = avio_rl32(pb);
-            ff_add_index_entry(&vst->index_entries, &vst->nb_index_entries, &vst->index_entries_allocated_size,
+            ff_add_index_entry(&vst->internal->index_entries, &vst->internal->nb_index_entries, &vst->internal->index_entries_allocated_size,
                                avio_tell(pb) - 20, pts, file, 0, AVINDEX_KEYFRAME);
             size -= 4;
         } else if (ast && type == MKTAG('A', 'U', 'D', 'F') && size >= 4) {
             uint64_t pts = avio_rl32(pb);
-            ff_add_index_entry(&ast->index_entries, &ast->nb_index_entries, &ast->index_entries_allocated_size,
+            ff_add_index_entry(&ast->internal->index_entries, &ast->internal->nb_index_entries, &ast->internal->index_entries_allocated_size,
                                avio_tell(pb) - 20, pts, file, 0, AVINDEX_KEYFRAME);
             size -= 4;
         } else if (vst && type == MKTAG('W','B','A','L') && size >= 28) {
@@ -374,22 +372,21 @@ static int read_header(AVFormatContext *avctx)
     }
 
     if (vst)
-        vst->duration = vst->nb_index_entries;
+        vst->duration = vst->internal->nb_index_entries;
     if (ast)
-        ast->duration = ast->nb_index_entries;
+        ast->duration = ast->internal->nb_index_entries;
 
-    if ((vst && !vst->nb_index_entries) || (ast && !ast->nb_index_entries)) {
+    if ((vst && !vst->internal->nb_index_entries) || (ast && !ast->internal->nb_index_entries)) {
         av_log(avctx, AV_LOG_ERROR, "no index entries found\n");
-        read_close(avctx);
         return AVERROR_INVALIDDATA;
     }
 
     if (vst && ast)
-        avio_seek(pb, FFMIN(vst->index_entries[0].pos, ast->index_entries[0].pos), SEEK_SET);
+        avio_seek(pb, FFMIN(vst->internal->index_entries[0].pos, ast->internal->index_entries[0].pos), SEEK_SET);
     else if (vst)
-        avio_seek(pb, vst->index_entries[0].pos, SEEK_SET);
+        avio_seek(pb, vst->internal->index_entries[0].pos, SEEK_SET);
     else if (ast)
-        avio_seek(pb, ast->index_entries[0].pos, SEEK_SET);
+        avio_seek(pb, ast->internal->index_entries[0].pos, SEEK_SET);
 
     return 0;
 }
@@ -415,12 +412,12 @@ static int read_packet(AVFormatContext *avctx, AVPacket *pkt)
         return AVERROR(EIO);
     }
 
-    pb = mlv->pb[st->index_entries[index].size];
+    pb = mlv->pb[st->internal->index_entries[index].size];
     if (!pb) {
         ret = FFERROR_REDO;
         goto next_packet;
     }
-    avio_seek(pb, st->index_entries[index].pos, SEEK_SET);
+    avio_seek(pb, st->internal->index_entries[index].pos, SEEK_SET);
 
     avio_skip(pb, 4); // blockType
     size = avio_rl32(pb);
@@ -481,10 +478,11 @@ static int read_close(AVFormatContext *s)
     return 0;
 }
 
-AVInputFormat ff_mlv_demuxer = {
+const AVInputFormat ff_mlv_demuxer = {
     .name           = "mlv",
     .long_name      = NULL_IF_CONFIG_SMALL("Magic Lantern Video (MLV)"),
     .priv_data_size = sizeof(MlvContext),
+    .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = probe,
     .read_header    = read_header,
     .read_packet    = read_packet,

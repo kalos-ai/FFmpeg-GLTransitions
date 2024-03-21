@@ -70,6 +70,11 @@ typedef void ID3D11Device;
 #define NVENC_HAVE_H264_LVL6
 #endif
 
+// SDK 11.1 compile time feature checks
+#if NVENCAPI_CHECK_VERSION(11, 1)
+#define NVENC_HAVE_QP_CHROMA_OFFSETS
+#endif
+
 typedef struct NvencSurface
 {
     NV_ENC_INPUT_PTR input_surface;
@@ -103,7 +108,7 @@ enum {
     PRESET_LOW_LATENCY_DEFAULT ,
     PRESET_LOW_LATENCY_HQ ,
     PRESET_LOW_LATENCY_HP,
-    PRESET_LOSSLESS_DEFAULT, // lossless presets must be the last ones
+    PRESET_LOSSLESS_DEFAULT,
     PRESET_LOSSLESS_HP,
 #ifdef NVENC_HAVE_NEW_PRESETS
     PRESET_P1,
@@ -166,6 +171,9 @@ typedef struct NvencContext
     AVFifoBuffer *output_surface_ready_queue;
     AVFifoBuffer *timestamp_list;
 
+    NV_ENC_SEI_PAYLOAD *sei_data;
+    int sei_data_size;
+
     struct {
         void *ptr;
         int ptr_index;
@@ -210,6 +218,8 @@ typedef struct NvencContext
     int init_qp_b;
     int init_qp_i;
     int cqp;
+    int qp_cb_offset;
+    int qp_cr_offset;
     int weighted_pred;
     int coder;
     int b_ref_mode;
@@ -219,6 +229,7 @@ typedef struct NvencContext
     int tuning_info;
     int multipass;
     int ldkfs;
+    int extra_sei;
 } NvencContext;
 
 int ff_nvenc_encode_init(AVCodecContext *avctx);

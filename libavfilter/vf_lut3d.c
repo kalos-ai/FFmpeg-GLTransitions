@@ -1166,10 +1166,7 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_GBRPF32, AV_PIX_FMT_GBRAPF32,
         AV_PIX_FMT_NONE
     };
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
-        return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+    return ff_set_common_formats_from_list(ctx, pix_fmts);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -1234,7 +1231,8 @@ static AVFrame *apply_lut(AVFilterLink *inlink, AVFrame *in)
 
     td.in  = in;
     td.out = out;
-    ctx->internal->execute(ctx, lut3d->interp, &td, NULL, FFMIN(outlink->h, ff_filter_get_nb_threads(ctx)));
+    ff_filter_execute(ctx, lut3d->interp, &td, NULL,
+                      FFMIN(outlink->h, ff_filter_get_nb_threads(ctx)));
 
     if (out != in)
         av_frame_free(&in);
@@ -1353,7 +1351,7 @@ static const AVFilterPad lut3d_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_lut3d = {
+const AVFilter ff_vf_lut3d = {
     .name          = "lut3d",
     .description   = NULL_IF_CONFIG_SMALL("Adjust colors using a 3D LUT."),
     .priv_size     = sizeof(LUT3DContext),
@@ -1620,7 +1618,7 @@ static const AVFilterPad haldclut_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_haldclut = {
+const AVFilter ff_vf_haldclut = {
     .name          = "haldclut",
     .description   = NULL_IF_CONFIG_SMALL("Adjust colors using a Hald CLUT."),
     .priv_size     = sizeof(LUT3DContext),
@@ -2232,7 +2230,8 @@ static AVFrame *apply_1d_lut(AVFilterLink *inlink, AVFrame *in)
 
     td.in  = in;
     td.out = out;
-    ctx->internal->execute(ctx, lut1d->interp, &td, NULL, FFMIN(outlink->h, ff_filter_get_nb_threads(ctx)));
+    ff_filter_execute(ctx, lut1d->interp, &td, NULL,
+                      FFMIN(outlink->h, ff_filter_get_nb_threads(ctx)));
 
     if (out != in)
         av_frame_free(&in);
@@ -2285,7 +2284,7 @@ static const AVFilterPad lut1d_outputs[] = {
     { NULL }
 };
 
-AVFilter ff_vf_lut1d = {
+const AVFilter ff_vf_lut1d = {
     .name          = "lut1d",
     .description   = NULL_IF_CONFIG_SMALL("Adjust colors using a 1D LUT."),
     .priv_size     = sizeof(LUT1DContext),
