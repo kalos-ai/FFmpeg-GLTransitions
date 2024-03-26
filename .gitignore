@@ -28,6 +28,7 @@
 /.config
 /.version
 /libavcodec/libavcodec.a
+/libavformat/libavformat.a
 /ffmpeg
 /ffmpeg_g
 /ffprobe_g
