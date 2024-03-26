@@ -1,0 +1,9 @@
+<!--
+Thanks for submitting a pull request!
+
+If you create a new transition, or update an existing one, our bot🤖 will come to validate and render it to GIF 🙂
+
+Last Minute Tips':
+- Please check if your transition is not already covered by an existing one.
+- It is great (but not mandatory) if your transitions can include uniforms parameters to be customizable by the final user.
+-->
