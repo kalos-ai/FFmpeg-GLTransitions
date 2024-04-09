@@ -1,5 +1,10 @@
-FFmpeg README
-=============
+FFmpeg with GL-Transitions
+===========================
+
+This is a fork of the FFmpeg project with the addition of the GL-Transitions.
+This fork mantains by @Leask
+
+## About FFmpeg
 
 FFmpeg is a collection of libraries and tools to process multimedia content
 such as audio, video, subtitles and related metadata.
@@ -63,6 +68,24 @@ avoided because they are not part of our review process and will be ignored.
 - https://askubuntu.com/questions/429734/collect2-error-ld-returned-1-exit-status
 - https://superuser.com/questions/1257225/collect2-error-ld-returned-1-exit-status-makefile107-recipe-for-target-bina
 - https://blog.csdn.net/Asa_Ho/article/details/116096500
+
+## Package dependencies
+
+- libass-dev
+- libfdk-aac-dev
+- libgl1
+- libgl1-mesa-glx
+- libglew-dev
+- libglew2.2
+- libglib2.0-0
+- libmp3lame-dev
+- libopus-dev
+- libtheora-dev
+- libvorbis-dev
+- libvpx-dev
+- libx264-dev
+- libx265-dev
+- libxvidcore-dev
 
 
 ## Using gl-transitions

@@ -1,0 +1,74 @@
+FROM nvidia/cuda:12.2.2-base-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Remove any third-party apt sources to avoid issues with expiring keys.
+RUN rm -f /etc/apt/sources.list.d/*.list
+
+# Install basic packages
+RUN apt-get update && apt-get install -y \
+  apt-utils \
+  awscli \
+  build-essential \
+  bzip2 \
+  ca-certificates \
+  curl \
+  git \
+  libass-dev \
+  libfdk-aac-dev \
+  libgl1 \
+  libgl1-mesa-glx \
+  libglew-dev \
+  libglew2.2 \
+  libglib2.0-0 \
+  libmp3lame-dev \
+  libopus-dev \
+  libtheora-dev \
+  libvorbis-dev \
+  libvpx-dev \
+  libx264-dev \
+  libx265-dev \
+  libxvidcore-dev \
+  nasm \
+  python3-pip \
+  python3.10 \
+  sudo \
+  && rm -rf /var/lib/apt/lists/*
+
+# Prepare code directory
+RUN mkdir /app
+
+# Create a non-root user and switch to it.
+RUN adduser --disabled-password --gecos '' --shell /bin/bash kalos \
+  && chown -R kalos:kalos /app
+RUN echo "kalos ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-kalos
+
+ENV TINI_VERSION v0.19.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN chmod +x /tini
+
+# Set up environment variables
+USER kalos
+ENV HOME=/home/kalos
+ENV PATH="$HOME/.local/bin:$PATH"
+RUN mkdir $HOME/.cache $HOME/.config
+ENV OUTPUT_S3_BUCKET="kalos-workflow-storage"
+ENV AWS_DEFAULT_REGION="us-east-1"
+ENV AWS_ACCESS_KEY_ID=
+ENV AWS_SECRET_ACCESS_KEY=
+ENV MODEL_DIR=
+ENV IDLE_WAITING_TIME=0
+
+# Prepare python environment
+RUN pip3 install --upgrade pip wheel \
+  && rm -rf ~/.cache/pip
+
+# Building
+USER root
+COPY . /ffmpeg
+WORKDIR /ffmpeg
+RUN ./configure --prefix=/usr/local --enable-gpl --enable-nonfree --enable-libass --enable-libfdk-aac --enable-libfreetype --enable-libmp3lame --enable-libtheora --enable-libvorbis --enable-libvpx --enable-libx264 --enable-libx265 --enable-libopus --enable-libxvid --enable-opengl --enable-filter=gltransition --extra-libs='-lGLEW -lEGL' && make
+RUN mv ffmpeg /bin/ && rm -rf /ffmpeg
+
+# CMD /bin/bash
+ENTRYPOINT ["/tini", "-v", "--", "/app/entrypoint.sh"]
